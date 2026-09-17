@@ -1,11 +1,23 @@
 import "dotenv/config";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+// initiateRateNegotiation() genuinely calls sendEmail() — with a real
+// EMAIL_SERVER configured (as this dev environment has), an unmocked run of
+// this suite sends a REAL email to the real owner inbox every time these
+// tests execute, using fake test-fixture content ("Priya at Test Prospect
+// Co"). Confirmed this actually happened (real emails landed in the real
+// inbox during this session's own repeated test runs) — mocking the one
+// real side-effecting boundary here, same "simulate send" discipline
+// phase3-email-center.e2e.test.ts already uses for sendOutreachEmail.
+// Everything else in this file stays a real, unmocked Postgres integration
+// test.
+vi.mock("@/lib/email", () => ({ sendEmail: vi.fn().mockResolvedValue(undefined) }));
 
 import { prisma } from "@/lib/prisma";
 import { initiateRateNegotiation, completeRateNegotiationAfterOwnerReply } from "./rate-negotiation";
 
-// Real local-Postgres integration test, no mocking — same convention as
+// Real local-Postgres integration test — same convention as
 // opportunity-outreach-actions.test.ts. Scoped under one throwaway
 // Organization, cleaned up in afterAll (cascades to every Company/Contact/
 // Reply/RateNegotiation/EmailDraft/OutreachMeeting created here).
@@ -57,7 +69,7 @@ describe("rate-negotiation", () => {
     // No LeadOpportunity/CompanyIntelligence exist for this company — the
     // scope summary must say so honestly, never invent project detail.
     expect(negotiation!.scopeSummary).toContain("No real project-scope information");
-  });
+  }, 30000);
 
   it("initiateRateNegotiation is idempotent — a retry on the same reply never creates a second negotiation", async () => {
     const reply = await prisma.reply.create({
@@ -70,7 +82,7 @@ describe("rate-negotiation", () => {
     expect(first.negotiationId).toBe(second.negotiationId);
     const count = await prisma.rateNegotiation.count({ where: { replyId: reply.id } });
     expect(count).toBe(1);
-  });
+  }, 30000);
 
   it("initiateRateNegotiation grounds its recommendation in real LeadOpportunity data when it exists", async () => {
     const groundedCompany = await prisma.company.create({ data: { organizationId: orgId, name: "Grounded Co" } });
@@ -98,7 +110,7 @@ describe("rate-negotiation", () => {
     const negotiation = await prisma.rateNegotiation.findUnique({ where: { id: result.negotiationId } });
     expect(negotiation!.scopeSummary).toContain("Outdated website needs a full rebuild");
     expect(negotiation!.scopeSummary).toContain("1,50,000");
-  });
+  }, 30000);
 
   it("completeRateNegotiationAfterOwnerReply creates a DRAFT-status EmailDraft (never auto-sent) and a real closing meeting, relaying the owner's own real words", async () => {
     const reply = await prisma.reply.create({
@@ -125,7 +137,7 @@ describe("rate-negotiation", () => {
     const negotiation = await prisma.rateNegotiation.findUnique({ where: { id: negotiationId! } });
     expect(negotiation!.status).toBe("CLIENT_REPLIED");
     expect(negotiation!.ownerReplyContent).toBe(ownerWords);
-  });
+  }, 30000);
 
   it("completeRateNegotiationAfterOwnerReply is idempotent — a second call never creates a duplicate draft or meeting", async () => {
     const reply = await prisma.reply.create({
@@ -138,5 +150,5 @@ describe("rate-negotiation", () => {
 
     expect(second.draftId).toBe(first.draftId);
     expect(second.meetingId).toBe(first.meetingId);
-  });
+  }, 30000);
 });

@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, CalendarClock, Send, Sparkles } from "lucide-react";
+import { ArrowLeft, CalendarClock, Send, Sparkles, Paperclip, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,11 @@ import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { FormField } from "@/components/ui/form-field";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { composeEmail, composeEmailWithAI } from "@/app/dashboard/outreach/_lib/compose-actions";
+import { composeEmail, composeEmailWithAI, uploadComposeAttachment } from "@/app/dashboard/outreach/_lib/compose-actions";
+import { deleteDocument } from "@/app/dashboard/documents/actions";
+import { emailAddressSchema } from "@/lib/validations/outreach";
+
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
 interface ComposeContact {
   id: string;
@@ -36,6 +40,30 @@ function contactLabel(contact: ComposeContact): string {
   const name = [contact.firstName, contact.lastName].filter(Boolean).join(" ");
   const company = contact.company?.name;
   return `${name} <${contact.email}>${company ? ` — ${company}` : ""}`;
+}
+
+/** Comma- or newline-separated list of addresses -> trimmed, non-empty strings. Never lowercases/dedupes here — that's the server's job (composeEmailCore); this is purely "what did the human type." */
+function parseEmailList(raw: string): string[] {
+  return raw
+    .split(/[,\n]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+/** Returns the first malformed address as a clear error, or null if every entry (if any) is a real, well-formed address. */
+function validateEmailList(emails: string[], label: string): string | null {
+  for (const email of emails) {
+    if (!emailAddressSchema.safeParse(email).success) {
+      return `${label} has an invalid email address: "${email}".`;
+    }
+  }
+  return null;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 /**
@@ -82,26 +110,92 @@ export function ComposeForm({ contacts }: ComposeFormProps) {
   const [aiPending, startAiTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const [contactId, setContactId] = useState(contacts[0]?.id ?? "");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [ccText, setCcText] = useState("");
+  const [bccText, setBccText] = useState("");
   const [instructions, setInstructions] = useState("");
   const [scheduledFor, setScheduledFor] = useState("");
+  const [files, setFiles] = useState<File[]>([]);
 
   const selectedContact = useMemo(() => contacts.find((c) => c.id === contactId) ?? null, [contacts, contactId]);
 
-  function handleSaveDraft(e: React.FormEvent) {
-    e.preventDefault();
+  const ccList = useMemo(() => parseEmailList(ccText), [ccText]);
+  const bccList = useMemo(() => parseEmailList(bccText), [bccText]);
+  const ccFieldError = useMemo(() => validateEmailList(ccList, "Cc"), [ccList]);
+  const bccFieldError = useMemo(() => validateEmailList(bccList, "Bcc"), [bccList]);
+
+  function handleFilesSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    setAttachError(null);
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = ""; // Lets the same file be re-picked after a remove.
+    const oversized = picked.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+    if (oversized) {
+      setAttachError(`"${oversized.name}" is larger than 20MB — attachments must be 20MB or smaller.`);
+      return;
+    }
+    setFiles((prev) => [...prev, ...picked]);
+  }
+
+  function removeFile(index: number) {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  /**
+   * Uploads every staged file as a real, genuinely-unlinked Document
+   * (uploadComposeAttachment — same storage primitive as the Documents
+   * module) before a draft exists. If a later file in the same batch fails,
+   * the ones already uploaded are deleted again (reusing the existing
+   * deleteDocument action) rather than left dangling just because the human
+   * picked one bad file among several.
+   */
+  async function uploadAllAttachments(): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
+    const ids: string[] = [];
+    for (const file of files) {
+      const formData = new FormData();
+      formData.set("file", file);
+      const result = await uploadComposeAttachment(formData);
+      if (!result.ok || !result.documentId) {
+        await Promise.all(ids.map((id) => deleteDocument(id).catch(() => undefined)));
+        return { ok: false, error: result.error ?? `Failed to upload "${file.name}".` };
+      }
+      ids.push(result.documentId);
+    }
+    return { ok: true, ids };
+  }
+
+  function submit(scheduledDate?: Date) {
     setError(null);
 
     if (!contactId) {
       setError("Choose a contact to compose this email to.");
       return;
     }
+    if (ccFieldError) {
+      setError(ccFieldError);
+      return;
+    }
+    if (bccFieldError) {
+      setError(bccFieldError);
+      return;
+    }
 
     startTransition(async () => {
-      const result = await composeEmail(contactId, subject, body);
+      const uploaded = await uploadAllAttachments();
+      if (!uploaded.ok) {
+        setError(uploaded.error);
+        return;
+      }
+
+      const result = await composeEmail(contactId, subject, body, {
+        cc: ccList,
+        bcc: bccList,
+        scheduledFor: scheduledDate,
+        attachmentDocumentIds: uploaded.ids,
+      });
       if (!result.ok) {
         setError(result.error ?? "Something went wrong composing this draft.");
         return;
@@ -110,13 +204,14 @@ export function ComposeForm({ contacts }: ComposeFormProps) {
     });
   }
 
+  function handleSaveDraft(e: React.FormEvent) {
+    e.preventDefault();
+    submit(undefined);
+  }
+
   function handleSchedule() {
     setError(null);
 
-    if (!contactId) {
-      setError("Choose a contact to compose this email to.");
-      return;
-    }
     if (!scheduledFor) {
       setError("Pick a date/time to schedule this draft for.");
       return;
@@ -128,14 +223,7 @@ export function ComposeForm({ contacts }: ComposeFormProps) {
       return;
     }
 
-    startTransition(async () => {
-      const result = await composeEmail(contactId, subject, body, { scheduledFor: scheduledDate });
-      if (!result.ok) {
-        setError(result.error ?? "Something went wrong scheduling this draft.");
-        return;
-      }
-      router.push(`/dashboard/outreach/inbox/${contactId}`);
-    });
+    submit(scheduledDate);
   }
 
   function handleWriteWithAI() {
@@ -199,23 +287,25 @@ export function ComposeForm({ contacts }: ComposeFormProps) {
               {selectedContact && <ContactContextPanel contact={selectedContact} />}
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <FormField
-                  label="Cc"
-                  htmlFor="compose-cc"
-                  hint="Not yet supported by the current email provider integration — there's no cc column on drafts and Gmail/Outlook/Resend/SMTP sending doesn't accept one yet."
-                >
-                  <div title="Not yet supported by the current email provider integration — nothing typed here would be saved or sent, so it's disabled rather than silently dropped.">
-                    <Input id="compose-cc" value="" disabled placeholder="Not yet supported" />
-                  </div>
+                <FormField label="Cc" htmlFor="compose-cc" hint="Optional — comma or newline separated email addresses.">
+                  <Textarea
+                    id="compose-cc"
+                    value={ccText}
+                    onChange={(e) => setCcText(e.target.value)}
+                    placeholder="e.g. manager@company.com"
+                    className="min-h-16"
+                  />
+                  {ccFieldError && <p className="mt-1 text-xs text-destructive">{ccFieldError}</p>}
                 </FormField>
-                <FormField
-                  label="Bcc"
-                  htmlFor="compose-bcc"
-                  hint="Not yet supported by the current email provider integration — same reason as Cc."
-                >
-                  <div title="Not yet supported by the current email provider integration — nothing typed here would be saved or sent, so it's disabled rather than silently dropped.">
-                    <Input id="compose-bcc" value="" disabled placeholder="Not yet supported" />
-                  </div>
+                <FormField label="Bcc" htmlFor="compose-bcc" hint="Optional — comma or newline separated email addresses.">
+                  <Textarea
+                    id="compose-bcc"
+                    value={bccText}
+                    onChange={(e) => setBccText(e.target.value)}
+                    placeholder="e.g. records@company.com"
+                    className="min-h-16"
+                  />
+                  {bccFieldError && <p className="mt-1 text-xs text-destructive">{bccFieldError}</p>}
                 </FormField>
               </div>
 
@@ -238,6 +328,40 @@ export function ComposeForm({ contacts }: ComposeFormProps) {
                   className="min-h-48"
                   required
                 />
+              </FormField>
+
+              <FormField label="Attachments" htmlFor="compose-attachments" hint="Optional. Up to 20MB per file.">
+                <input
+                  id="compose-attachments"
+                  type="file"
+                  multiple
+                  onChange={handleFilesSelected}
+                  className="text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-accent file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-foreground"
+                />
+                {files.length > 0 && (
+                  <ul className="mt-2 flex flex-col gap-1.5">
+                    {files.map((file, i) => (
+                      <li
+                        key={`${file.name}-${file.lastModified}-${i}`}
+                        className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-xs"
+                      >
+                        <span className="flex items-center gap-1.5 text-foreground">
+                          <Paperclip className="size-3.5 text-muted-foreground" /> {file.name}
+                          <span className="text-muted-foreground">({formatBytes(file.size)})</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeFile(i)}
+                          className="text-muted-foreground hover:text-destructive"
+                          aria-label={`Remove ${file.name}`}
+                        >
+                          <X className="size-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {attachError && <p className="mt-1 text-xs text-destructive">{attachError}</p>}
               </FormField>
 
               <div className="rounded-lg border border-border p-3">
@@ -286,14 +410,17 @@ export function ComposeForm({ contacts }: ComposeFormProps) {
               </p>
 
               <div className="flex flex-wrap gap-3">
-                <Button type="submit" disabled={busy || !contactId || !subject.trim() || !body.trim()}>
+                <Button
+                  type="submit"
+                  disabled={busy || !contactId || !subject.trim() || !body.trim() || !!ccFieldError || !!bccFieldError}
+                >
                   <Send className="size-4" /> {pending ? "Saving draft…" : "Save draft"}
                 </Button>
                 <Button
                   type="button"
                   variant="secondary"
                   onClick={handleSchedule}
-                  disabled={busy || !contactId || !subject.trim() || !body.trim() || !scheduledFor}
+                  disabled={busy || !contactId || !subject.trim() || !body.trim() || !scheduledFor || !!ccFieldError || !!bccFieldError}
                 >
                   <CalendarClock className="size-4" /> {pending ? "Saving…" : "Schedule"}
                 </Button>

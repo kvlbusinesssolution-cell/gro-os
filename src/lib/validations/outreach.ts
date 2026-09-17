@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const requiredEmail = z.string().trim().toLowerCase().email("Enter a valid email address.");
 
+// Exported so other real recipient-address inputs (e.g. Compose's Cc/Bcc,
+// src/app/dashboard/outreach/_lib/compose-actions.ts) reuse the exact same
+// validation instead of inventing a second email regex.
+export const emailAddressSchema = requiredEmail;
+
 export const contactStatusSchema = z.enum(["NEW", "CONTACTED", "REPLIED", "INTERESTED", "NOT_INTERESTED", "MEETING_BOOKED", "UNSUBSCRIBED"]);
 export type ContactStatusInput = z.infer<typeof contactStatusSchema>;
 

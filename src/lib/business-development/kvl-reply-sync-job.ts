@@ -29,6 +29,32 @@ function imapConfigured(): boolean {
   return !!(process.env.KVL_IMAP_HOST && process.env.KVL_IMAP_USER && process.env.KVL_IMAP_PASSWORD);
 }
 
+/**
+ * Real existence check backing the dedup backstop above — matches on the
+ * same org/contact/channel plus the exact real message content and, when
+ * the source email had a real `Date:` header, the exact `receivedAt` too
+ * (both are what a genuine re-fetch of the SAME still-unseen message would
+ * reproduce identically on retry). Exported for direct testing without
+ * standing up a mocked IMAP connection.
+ */
+export async function isDuplicateImapReply(
+  organizationId: string,
+  contactId: string,
+  content: string,
+  receivedAt: Date | null,
+): Promise<{ id: string } | null> {
+  return prisma.reply.findFirst({
+    where: {
+      organizationId,
+      contactId,
+      channel: "EMAIL",
+      content: content.trim(),
+      receivedAt: receivedAt ?? undefined,
+    },
+    select: { id: true },
+  });
+}
+
 export async function runKvlReplySync(): Promise<JobRunLog[]> {
   if (!imapConfigured()) {
     return [{ level: "warn", message: "Skipped — KVL_IMAP_HOST/KVL_IMAP_USER/KVL_IMAP_PASSWORD not configured yet." }];
@@ -115,6 +141,24 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
           if (!contact) {
             unmatchedCount += 1;
             logs.push({ level: "info", message: `No matching contact for reply from ${fromAddress} — marked read, not logged.`, organizationId });
+            await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+            continue;
+          }
+
+          // Idempotency backstop for the dedup gap the mailbox's own \Seen
+          // flag can't close on its own: if this job crashes (or
+          // `messageFlagsAdd` below itself fails/times out) *after*
+          // `logReplyCore` has already created the Reply row but *before*
+          // the message is marked \Seen, the next run re-fetches the same
+          // still-unseen UID and would otherwise log the exact same reply a
+          // second time. `logReplyCore` has no idempotency check of its own
+          // (it's also called from the manual "log a reply" UI, where every
+          // explicit submission is intentionally a new row), so this
+          // existence check — same org/contact/channel/content/receivedAt —
+          // lives here, specific to this automated re-fetchable path.
+          const duplicate = await isDuplicateImapReply(organizationId, contact.id, bodyText, parsed.date ?? null);
+          if (duplicate) {
+            logs.push({ level: "info", message: `Reply from ${fromAddress} already logged as Reply ${duplicate.id} (re-fetched unseen message after an interrupted run) — skipped, marked read.`, organizationId });
             await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
             continue;
           }

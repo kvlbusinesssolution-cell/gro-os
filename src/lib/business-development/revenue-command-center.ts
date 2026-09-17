@@ -41,6 +41,25 @@ export interface RevenueCommandCenterToday {
   /** Real current open-pipeline value (not a "today" delta) from deals on companies this pipeline discovered. Null when there are no such deals with a real value yet — never a fabricated number. */
   pipelineValue: number | null;
   pipelineDealCount: number;
+  /** EmailDraft rows created today with `generatedByAgentId` set (an AI agent generated the draft). */
+  aiDraftsCreated: number;
+  /** EmailDraft rows created today with `generatedByAgentId` null — i.e. composed by a human via composeEmailCore (compose-actions.ts). Never conflated with aiDraftsCreated above. */
+  humanDraftsCreated: number;
+  /** EmailDraft rows created today currently sitting in PENDING_APPROVAL. */
+  pendingApproval: number;
+  /**
+   * Real delivered count — this app has no webhook-confirmed "delivered"
+   * timestamp on EmailDraft today (see src/app/api/webhooks/resend/route.ts:
+   * the Resend webhook only ever writes `bouncedAt`/`bounceReason` on
+   * `email.bounced` and `complainedAt` on `email.complained` — there is no
+   * `email.delivered` handler and no `deliveredAt` column). So `delivered`
+   * here is honestly defined as the closest real proxy: SENT today AND not
+   * bounced (`bouncedAt: null`) — never fabricated as a true delivery
+   * confirmation. Do not assume this means the inbox provider confirmed delivery.
+   */
+  delivered: number;
+  /** EmailDraft rows in FAILED or BOUNCED whose sentAt (falling back to updatedAt when sentAt is null, e.g. a FAILED draft that never sent) is today. */
+  failedEmails: number;
 }
 
 export interface RevenueCommandCenterFunnel {
@@ -76,6 +95,22 @@ export interface RevenueCommandCenterFunnel {
  *   (src/app/dashboard/crm/deals/page.tsx), which has no per-stage query-param
  *   filter today, so both link to the same unfiltered board rather than an
  *   invented `?stage=Won` route.
+ * - aiDraftsCreated links to the real `?view=ai` tab (getAiGeneratedEmails,
+ *   src/lib/outreach/inbox.ts — `generatedByAgentId: { not: null }`, exactly
+ *   matching this tile's own definition).
+ * - humanDraftsCreated links to `?view=drafts` (getDraftEmails — status IN
+ *   DRAFT/PENDING_APPROVAL/APPROVED/QUEUED). There is no view filtered to
+ *   `generatedByAgentId: null` specifically, so this is the closest honest
+ *   destination — the same "closest real view" pattern as replies -> `?view=inbox`.
+ * - pendingApproval also links to `?view=drafts` — there is no dedicated
+ *   `PENDING_APPROVAL`-only view; Drafts is the closest existing real page
+ *   (PENDING_APPROVAL is one of the statuses it shows), per this function's
+ *   own "closest honest destination" convention.
+ * - delivered links to `?view=sent` (getSentEmails — status: SENT), the
+ *   closest real view given this app tracks no separate delivered state.
+ * - failedEmails links to the real `?view=failed` tab (getFailedEmails —
+ *   status IN FAILED/REJECTED/BOUNCED, a superset of this tile's
+ *   FAILED/BOUNCED definition since REJECTED isn't a send failure).
  */
 export function emailCenterLinkForTile(tileKey: string): string | null {
   switch (tileKey) {
@@ -95,6 +130,15 @@ export function emailCenterLinkForTile(tileKey: string): string | null {
     case "won":
     case "pipelineValue":
       return "/dashboard/crm/deals";
+    case "aiDraftsCreated":
+      return "/dashboard/outreach/inbox?view=ai";
+    case "humanDraftsCreated":
+    case "pendingApproval":
+      return "/dashboard/outreach/inbox?view=drafts";
+    case "delivered":
+      return "/dashboard/outreach/inbox?view=sent";
+    case "failedEmails":
+      return "/dashboard/outreach/inbox?view=failed";
     default:
       return null;
   }
@@ -114,6 +158,11 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
     proposals,
     won,
     openPipelineDeals,
+    aiDraftsCreated,
+    humanDraftsCreated,
+    pendingApproval,
+    delivered,
+    failedEmails,
   ] = await Promise.all([
     prisma.company.findMany({
       where: { organizationId, createdAt: { gte: dayStart } },
@@ -151,6 +200,25 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
       },
       select: { value: true },
     }),
+    prisma.emailDraft.count({
+      where: { organizationId, generatedByAgentId: { not: null }, createdAt: { gte: dayStart } },
+    }),
+    prisma.emailDraft.count({
+      where: { organizationId, generatedByAgentId: null, createdAt: { gte: dayStart } },
+    }),
+    prisma.emailDraft.count({
+      where: { organizationId, status: "PENDING_APPROVAL", createdAt: { gte: dayStart } },
+    }),
+    prisma.emailDraft.count({
+      where: { organizationId, status: "SENT", bouncedAt: null, sentAt: { gte: dayStart } },
+    }),
+    prisma.emailDraft.count({
+      where: {
+        organizationId,
+        status: { in: ["FAILED", "BOUNCED"] },
+        OR: [{ sentAt: { gte: dayStart } }, { sentAt: null, updatedAt: { gte: dayStart } }],
+      },
+    }),
   ]);
 
   const pipelineValues = openPipelineDeals.map((d) => d.value).filter((v): v is number => v != null);
@@ -171,6 +239,11 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
     wonCaveat: "Deals currently in the Won stage last updated today — Deal has no dedicated wonAt timestamp, so this is a best-effort proxy, not an exact 'moved to Won today' count.",
     pipelineValue,
     pipelineDealCount: openPipelineDeals.length,
+    aiDraftsCreated,
+    humanDraftsCreated,
+    pendingApproval,
+    delivered,
+    failedEmails,
   };
 }
 

@@ -25,9 +25,20 @@ import { getWhiteLabelEmailFrom } from "@/lib/white-label/resolve-brand";
 
 export interface OutreachEmailInput {
   to: string;
+  // Phase 3 Email Center — real Cc/Bcc recipients (EmailDraft.cc/.bcc in
+  // prisma/schema.prisma). Optional/empty on every provider below never
+  // sends an empty `cc`/`bcc` field to the provider — it's omitted entirely,
+  // never sent as `""` or `[]`.
+  cc?: string[];
+  bcc?: string[];
   subject: string;
   html: string;
   text: string;
+}
+
+/** Undefined (never an empty array) when there's nothing real to send — every provider below treats "omit the field" and "empty array" as the same "no cc/bcc" case, but only the JS side ever sees the array form. */
+function nonEmpty(emails: string[] | undefined): string[] | undefined {
+  return emails && emails.length > 0 ? emails : undefined;
 }
 
 export type OutreachEmailResult =
@@ -50,6 +61,8 @@ async function sendViaResend(input: OutreachEmailInput, emailFrom: { name: strin
       body: JSON.stringify({
         from,
         to: input.to,
+        cc: nonEmpty(input.cc),
+        bcc: nonEmpty(input.bcc),
         subject: input.subject,
         html: input.html,
         text: input.text,
@@ -74,6 +87,8 @@ async function sendViaSmtp(input: OutreachEmailInput, emailFrom: { name: string;
     await transport.sendMail({
       to: input.to,
       from,
+      cc: nonEmpty(input.cc),
+      bcc: nonEmpty(input.bcc),
       subject: input.subject,
       html: input.html,
       text: input.text,
@@ -92,7 +107,16 @@ async function sendViaGmail(
 ): Promise<OutreachEmailResult> {
   const endpoint = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
   try {
-    const message = [`To: ${input.to}`, `Subject: ${input.subject}`, "Content-Type: text/html; charset=utf-8", "", input.html].join("\r\n");
+    // The Gmail API's raw-MIME send determines real envelope recipients from
+    // the To/Cc/Bcc headers actually present in the message — there is no
+    // separate `cc`/`bcc` request field, so these are only ever added as
+    // headers when non-empty (an absent header is genuinely no recipient,
+    // never an empty "Cc: " line).
+    const headerLines = [`To: ${input.to}`];
+    if (input.cc?.length) headerLines.push(`Cc: ${input.cc.join(", ")}`);
+    if (input.bcc?.length) headerLines.push(`Bcc: ${input.bcc.join(", ")}`);
+    headerLines.push(`Subject: ${input.subject}`, "Content-Type: text/html; charset=utf-8", "");
+    const message = [...headerLines, input.html].join("\r\n");
     const raw = Buffer.from(message).toString("base64url");
 
     const start = Date.now();
@@ -123,6 +147,12 @@ async function sendViaGmail(
   }
 }
 
+/** Microsoft Graph's sendMail wants `{ emailAddress: { address } }` objects, never bare strings — `undefined` (not `[]`) when there's nothing real to send, same "omit rather than send empty" rule as every other provider here. */
+function toGraphRecipients(emails: string[] | undefined): Array<{ emailAddress: { address: string } }> | undefined {
+  const cleaned = nonEmpty(emails);
+  return cleaned ? cleaned.map((address) => ({ emailAddress: { address } })) : undefined;
+}
+
 async function sendViaOutlook(
   organizationId: string,
   connectionId: string | undefined,
@@ -143,6 +173,8 @@ async function sendViaOutlook(
           subject: input.subject,
           body: { contentType: "HTML", content: input.html },
           toRecipients: [{ emailAddress: { address: input.to } }],
+          ccRecipients: toGraphRecipients(input.cc),
+          bccRecipients: toGraphRecipients(input.bcc),
         },
       }),
     });

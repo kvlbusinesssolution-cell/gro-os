@@ -96,24 +96,47 @@ export async function queueDraft(draftId: string): Promise<ActionResult> {
   return { ok: true };
 }
 
-/** QUEUED -> SENT|FAILED. Only ever marks SENT after a real send genuinely succeeds — LinkedIn drafts use markLinkedInDraftSent instead (no automation). */
-export async function sendQueuedDraft(draftId: string): Promise<ActionResult> {
-  const session = await auth();
-  const userId = session?.user?.id;
-  if (!userId) return { ok: false, error: "You must be signed in." };
-
-  const resolved = await resolveDraftInOrg(userId, draftId);
-  if (!resolved) return { ok: false, error: "Draft not found." };
-  const draft = resolved.draft;
+/**
+ * Headless core of sendQueuedDraft — no session, everything past the org
+ * scope check (mirrors this repo's Core/wrapper convention, e.g.
+ * composeEmailCore in compose-actions.ts). Called by the session-gated
+ * wrapper below AND by the scheduled-send job (runScheduledEmailSend in
+ * src/lib/business-development/scheduled-send-job.ts), which promotes a due
+ * APPROVED-with-scheduledFor draft to QUEUED and then calls this exact
+ * function — the scheduled-send job never duplicates the real send logic.
+ *
+ * `actingUserId` is null when called from the job (no human triggered this
+ * particular send): in that case the "email sent" notification goes to the
+ * org's OWNER/ADMIN roster via notifyOrganizationOwners instead of a
+ * specific user, the same fallback-to-owner pattern
+ * dailyDeliveryBoardMeetingJob/linkedInReminderJob use in registry.ts.
+ *
+ * Re-checks the contact isn't UNSUBSCRIBED at send time — defense in depth
+ * against a contact unsubscribing between when a draft was queued (or
+ * scheduled) and this function actually running. Never silently sends
+ * anyway; fails the draft with a clear reason instead.
+ */
+export async function sendQueuedDraftCore(organizationId: string, draftId: string, actingUserId: string | null): Promise<ActionResult> {
+  const draft = await prisma.emailDraft.findUnique({ where: { id: draftId }, include: { contact: true } });
+  if (!draft || draft.organizationId !== organizationId) return { ok: false, error: "Draft not found." };
   if (draft.channel !== "EMAIL") return { ok: false, error: "Only email drafts can be sent this way — LinkedIn drafts are marked sent manually." };
   if (draft.status !== "QUEUED") return { ok: false, error: "Only a queued draft can be sent." };
+
+  if (draft.contact.status === "UNSUBSCRIBED") {
+    const failedReason = "Contact has unsubscribed since this draft was queued — send blocked.";
+    await prisma.emailDraft.update({ where: { id: draftId }, data: { status: "FAILED", failedReason } });
+    revalidatePath("/dashboard/outreach");
+    return { ok: false, error: failedReason };
+  }
 
   const baseUrl = getAppBaseUrl();
   const rawHtml = `<p>${draft.body.replace(/\n/g, "<br/>")}</p>`;
   const html = draft.trackingToken ? injectTracking(rawHtml, draft.trackingToken, baseUrl) : rawHtml;
 
-  const result = await sendOutreachEmail(resolved.membership.organizationId, {
+  const result = await sendOutreachEmail(organizationId, {
     to: draft.contact.email,
+    cc: draft.cc,
+    bcc: draft.bcc,
     subject: draft.subject ?? "",
     html,
     text: draft.body,
@@ -129,16 +152,38 @@ export async function sendQueuedDraft(draftId: string): Promise<ActionResult> {
     where: { id: draftId },
     data: { status: "SENT", sentAt: new Date(), resendMessageId: result.providerMessageId ?? undefined },
   });
-  await notifyUser({
-    userId,
-    organizationId: resolved.membership.organizationId,
-    type: "CRM_EVENT",
-    title: "Email sent",
-    message: `Sent "${draft.subject ?? "email"}" to ${draft.contact.firstName}.`,
-  });
+
+  if (actingUserId) {
+    await notifyUser({
+      userId: actingUserId,
+      organizationId,
+      type: "CRM_EVENT",
+      title: "Email sent",
+      message: `Sent "${draft.subject ?? "email"}" to ${draft.contact.firstName}.`,
+    });
+  } else {
+    await notifyOrganizationOwners({
+      organizationId,
+      type: "CRM_EVENT",
+      title: "Scheduled email sent",
+      message: `Sent "${draft.subject ?? "email"}" to ${draft.contact.firstName} at its scheduled time.`,
+    });
+  }
 
   revalidatePath("/dashboard/outreach");
   return { ok: true };
+}
+
+/** QUEUED -> SENT|FAILED. Only ever marks SENT after a real send genuinely succeeds — LinkedIn drafts use markLinkedInDraftSent instead (no automation). */
+export async function sendQueuedDraft(draftId: string): Promise<ActionResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const resolved = await resolveDraftInOrg(userId, draftId);
+  if (!resolved) return { ok: false, error: "Draft not found." };
+
+  return sendQueuedDraftCore(resolved.membership.organizationId, draftId, userId);
 }
 
 /** LinkedIn drafts are never sent by this app — the user pastes the text into LinkedIn themselves, then confirms here. Zero automation. */

@@ -35,7 +35,17 @@ export interface InboxThread {
   sentiment: ReplySentiment | null;
 }
 
-export type TimelineEvent = { type: "DRAFT"; draft: EmailDraft } | { type: "REPLY"; reply: Reply };
+/** Minimal, real attachment shape for the Inbox thread view — filename/size/type only, never the file bytes. */
+export interface TimelineDraftAttachment {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  mimeType: string;
+}
+
+export type TimelineEvent =
+  | { type: "DRAFT"; draft: EmailDraft & { attachments: TimelineDraftAttachment[] } }
+  | { type: "REPLY"; reply: Reply };
 
 /** Shared pagination shape for every list function in this module. */
 export interface PaginatedResult<T> {
@@ -197,7 +207,13 @@ export async function getContactTimeline(organizationId: string, contactId: stri
   const [drafts, replies] = await Promise.all([
     prisma.emailDraft.findMany({
       where: { contactId },
-      include: { approvals: { orderBy: { createdAt: "desc" } } },
+      include: {
+        approvals: { orderBy: { createdAt: "desc" } },
+        // Phase 3 Email Center — real attachments (Document rows linked via
+        // linkedEmailDraftId), filename/size/type only so the timeline view
+        // never has to load file bytes just to show a list.
+        attachments: { select: { id: true, name: true, sizeBytes: true, mimeType: true } },
+      },
     }),
     prisma.reply.findMany({ where: { contactId } }),
   ]);

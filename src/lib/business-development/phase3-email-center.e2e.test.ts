@@ -29,6 +29,9 @@ import { getCompanyCompleteTimeline } from "@/lib/business-development/company-c
 import { suggestNextActionForCompany } from "@/lib/business-development/company-next-action";
 import { summarizeCompanyConversation } from "@/lib/business-development/company-conversation-summary";
 import { askAiAboutClient } from "@/lib/business-development/ask-ai-about-client";
+import { computeRevenueCommandCenterToday } from "@/lib/business-development/revenue-command-center";
+import { getTodaysClientConversations } from "@/lib/business-development/todays-client-conversations";
+import { runScheduledEmailSend } from "@/lib/business-development/scheduled-send-job";
 
 /**
  * Real, end-to-end verification of the Phase 3 "Email + Complete Client
@@ -380,6 +383,90 @@ describe("Phase 3 Email Center — real end-to-end chain", () => {
     expect(result.totalCount).toBeGreaterThan(0);
     const match = result.items.find((r) => r.type === "DRAFT" && r.draft.id === draftId);
     expect(match).toBeTruthy();
+  });
+
+  it("Step 14: composeEmailCore persists real Cc/Bcc recipients intact (Phase 3 CC/BCC extension), trimmed/lowercased/de-duplicated", async () => {
+    const ccBccContact = await prisma.contact.create({
+      data: {
+        organizationId: orgId,
+        companyId,
+        firstName: "CcBcc",
+        lastName: "Fixture",
+        email: `ccbcc-${Date.now()}@example.com`,
+      },
+    });
+
+    const result = await composeEmailCore(orgId, userId, ccBccContact.id, "Cc/Bcc coverage test", "Body text for cc/bcc coverage.", {
+      cc: ["  Manager@Example.com ", "manager@example.com"],
+      bcc: ["archive@example.com"],
+    });
+    expect(result.ok).toBe(true);
+
+    const draft = await prisma.emailDraft.findUniqueOrThrow({ where: { id: result.draftId! } });
+    expect(draft.cc).toEqual(["manager@example.com"]);
+    expect(draft.bcc).toEqual(["archive@example.com"]);
+  });
+
+  it("Step 15: a due scheduled draft for an UNSUBSCRIBED contact is never sent, and is failed with an honest reason (scheduled-send-job)", async () => {
+    const unsubContact = await prisma.contact.create({
+      data: {
+        organizationId: orgId,
+        companyId,
+        firstName: "Unsub",
+        lastName: "Fixture",
+        email: `unsub-sched-${Date.now()}@example.com`,
+        status: "UNSUBSCRIBED",
+      },
+    });
+    const dueDraft = await prisma.emailDraft.create({
+      data: {
+        organizationId: orgId,
+        contactId: unsubContact.id,
+        channel: "EMAIL",
+        purpose: "INTRODUCTION",
+        tone: "PROFESSIONAL",
+        subject: "Should never send",
+        body: "This must never actually send.",
+        status: "APPROVED",
+        scheduledFor: new Date(Date.now() - 60_000),
+      },
+    });
+
+    await runScheduledEmailSend();
+
+    const updated = await prisma.emailDraft.findUniqueOrThrow({ where: { id: dueDraft.id } });
+    expect(updated.status).toBe("FAILED");
+    expect(updated.failedReason).toContain("unsubscribed");
+    expect(updated.queuedAt).toBeNull();
+    expect(updated.sentAt).toBeNull();
+  });
+
+  it("Step 16: Revenue Command Center's 'today' tile counts match real, independently-recomputed DB counts for this exact org", async () => {
+    const today = await computeRevenueCommandCenterToday(orgId);
+
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+
+    const [aiCount, humanCount, deliveredCount] = await Promise.all([
+      prisma.emailDraft.count({ where: { organizationId: orgId, generatedByAgentId: { not: null }, createdAt: { gte: dayStart } } }),
+      prisma.emailDraft.count({ where: { organizationId: orgId, generatedByAgentId: null, createdAt: { gte: dayStart } } }),
+      prisma.emailDraft.count({ where: { organizationId: orgId, status: "SENT", bouncedAt: null, sentAt: { gte: dayStart } } }),
+    ]);
+
+    expect(today.aiDraftsCreated).toBe(aiCount);
+    expect(today.humanDraftsCreated).toBe(humanCount);
+    expect(today.delivered).toBe(deliveredCount);
+    // This exact chain composed several real human drafts today (Step 3, Step 14) — never zero.
+    expect(today.humanDraftsCreated).toBeGreaterThan(0);
+  });
+
+  it("Step 17: getTodaysClientConversations surfaces today's real activity from this exact chain, with its real opportunity/deal attached", async () => {
+    const rows = await getTodaysClientConversations(orgId);
+    const row = rows.find((r) => r.contact.id === contactId);
+    expect(row).toBeDefined();
+    expect(row!.lastReplyPreview).toContain("real problem");
+    expect(row!.opportunity?.id).toBe(opportunityId);
+    expect(row!.deal?.id).toBe(dealId);
   });
 
   it("Tenant isolation: a second, unrelated Organization sees none of this data", async () => {

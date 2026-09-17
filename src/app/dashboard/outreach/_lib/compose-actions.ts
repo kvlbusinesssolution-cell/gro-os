@@ -11,6 +11,8 @@ import { generateStructured } from "@/lib/ai/fallback";
 import { getPersona } from "@/lib/ai/personas";
 import { buildContactContext } from "@/lib/outreach/personalization";
 import { getContactTimeline } from "@/lib/outreach/inbox";
+import { emailAddressSchema } from "@/lib/validations/outreach";
+import { saveDocumentFile, deleteDocumentFile } from "@/lib/storage/documents";
 
 // A "use server" file may only export async functions — Next.js strips/
 // rejects any other export at build time (see
@@ -24,26 +26,124 @@ async function resolveActiveMembership(userId: string) {
 }
 
 /**
- * CC/BCC decision (Phase 3 Compose extension): `EmailDraft` has NO `cc`/
- * `bcc` column (confirmed by reading the model — only `subject`/`body`/
- * `personalizationNotes`/etc), and `sendOutreachEmail`'s `OutreachEmailInput`
- * (src/lib/outreach/email-provider.ts) only accepts `{ to, subject, html,
- * text }` at send time either — none of the four real providers it wraps
- * (Gmail/Outlook/Resend/SMTP) are ever passed a cc/bcc anywhere in that
- * file. So there is genuinely nowhere real for CC/BCC to go yet: no
- * persisted column and no send-time parameter. Repurposing
- * `personalizationNotes` (a `Json?` field that means "which real facts were
- * woven into an AI draft") to smuggle recipient addresses would be
- * semantically wrong and would silently corrupt that field's real meaning
- * for the approval-review UI. Rather than fabricate storage that quietly
- * drops the data (or worse, silently succeeds while never actually cc'ing/
- * bcc'ing anyone), `composeEmailCore`/`composeEmail` deliberately do NOT
- * accept `cc`/`bcc` params. The Compose UI instead renders CC/BCC fields as
- * disabled with an honest tooltip explaining they aren't wired to a real
- * column or send path yet — never accepting input that would be silently
- * thrown away. `scheduledFor`, by contrast, IS a real column on
- * `EmailDraft` (Phase 3), so it's fully supported below.
+ * CC/BCC (Phase 3 Compose extension, now wired end to end): `EmailDraft.cc`/
+ * `.bcc` are real `String[] @default([])` columns (migration
+ * `20260917165930_email_draft_cc_bcc`), and `sendOutreachEmail`'s
+ * `OutreachEmailInput` (src/lib/outreach/email-provider.ts) accepts/forwards
+ * `cc`/`bcc` to all four real providers (Gmail/Outlook/Resend/SMTP). Each
+ * address is validated with the same `emailAddressSchema` every other real
+ * email field in this app uses (src/lib/validations/outreach.ts) — an
+ * invalid address in either list fails the whole compose with a clear error
+ * rather than silently dropping it or silently sending a malformed address
+ * to a provider. Valid addresses are trimmed, lowercased, and de-duplicated
+ * before persisting.
+ *
+ * Attachments reuse the app's existing Document/storage model — a Document
+ * can be uploaded genuinely unlinked (see `uploadComposeAttachment` below,
+ * built on the same `saveDocumentFile` primitive as the Documents module's
+ * `uploadDocument`) before a real EmailDraft exists yet, then linked via
+ * `Document.linkedEmailDraftId` inside the same transaction that creates the
+ * draft. If draft creation fails for ANY reason (validation, a mismatched/
+ * cross-org attachment id, a DB error), `cleanupOrphanedAttachments` deletes
+ * those staged Documents again — Compose never leaves a dangling, unlinked
+ * Document behind just because the human never finished saving.
  */
+const MAX_COMPOSE_ATTACHMENT_BYTES = 20 * 1024 * 1024; // Matches src/app/dashboard/documents/actions.ts's MAX_FILE_BYTES convention.
+
+/** `undefined`/empty in -> `{ ok: true, value: [] }`; every address must be real and well-formed, trimmed/lowercased/de-duplicated on the way out. */
+function validateEmailList(emails: string[] | undefined, label: "Cc" | "Bcc"): { ok: true; value: string[] } | { ok: false; error: string } {
+  if (!emails || emails.length === 0) return { ok: true, value: [] };
+  const cleaned: string[] = [];
+  for (const raw of emails) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const parsed = emailAddressSchema.safeParse(trimmed);
+    if (!parsed.success) return { ok: false, error: `${label} has an invalid email address: "${trimmed}".` };
+    cleaned.push(parsed.data);
+  }
+  return { ok: true, value: Array.from(new Set(cleaned)) };
+}
+
+/**
+ * Deletes any staged (genuinely unlinked — `linkedEmailDraftId: null`)
+ * Documents among `documentIds` that belong to `organizationId`, real file
+ * and all. Scoped to this org and to still-unlinked rows only, so it can
+ * never touch another org's Document (tenant isolation) or one that's
+ * already legitimately linked to a different, already-saved draft.
+ */
+async function cleanupOrphanedAttachments(organizationId: string, documentIds: string[] | undefined): Promise<void> {
+  if (!documentIds || documentIds.length === 0) return;
+  const orphans = await prisma.document.findMany({
+    where: { id: { in: documentIds }, organizationId, linkedEmailDraftId: null },
+    select: { id: true, storageKey: true },
+  });
+  if (orphans.length === 0) return;
+
+  await Promise.all(
+    orphans.map(async (doc) => {
+      try {
+        if (doc.storageKey) await deleteDocumentFile(doc.storageKey);
+      } catch (error) {
+        console.error("[compose-actions] failed to delete an orphaned attachment's file:", error);
+      }
+    }),
+  );
+  await prisma.document.deleteMany({ where: { id: { in: orphans.map((d) => d.id) } } });
+}
+
+/**
+ * Real file upload for a Compose attachment, staged BEFORE the EmailDraft
+ * exists (Compose only creates the draft on Save/Schedule). Reuses the exact
+ * same storage primitive as the Documents module's `uploadDocument`
+ * (src/app/dashboard/documents/actions.ts) — `saveDocumentFile()` writing
+ * under storage/documents/ — rather than a second upload path; this just
+ * also returns the created Document's id (which `uploadDocument`'s
+ * `ActionResult` doesn't) so the client can hand it to `composeEmail` for
+ * linking once a real draft exists. The Document is created genuinely
+ * unlinked; see `cleanupOrphanedAttachments` for what happens if Compose is
+ * never actually saved.
+ */
+export async function uploadComposeAttachment(
+  formData: FormData,
+): Promise<{ ok: boolean; error?: string; documentId?: string; name?: string; sizeBytes?: number }> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const membership = await resolveActiveMembership(userId);
+  if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+  const organizationId = membership.organizationId;
+
+  const file = formData.get("file");
+  if (!(file instanceof File) || file.size === 0) {
+    return { ok: false, error: "Choose a file to attach." };
+  }
+  if (file.size > MAX_COMPOSE_ATTACHMENT_BYTES) {
+    return { ok: false, error: "Attachments must be 20MB or smaller." };
+  }
+
+  try {
+    const document = await prisma.document.create({
+      data: {
+        organizationId,
+        name: file.name,
+        storageKey: "",
+        mimeType: file.type || "application/octet-stream",
+        sizeBytes: file.size,
+        uploadedByUserId: userId,
+      },
+    });
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const storageKey = await saveDocumentFile(organizationId, document.id, file.name, buffer);
+    await prisma.document.update({ where: { id: document.id }, data: { storageKey } });
+
+    return { ok: true, documentId: document.id, name: document.name, sizeBytes: document.sizeBytes };
+  } catch (error) {
+    console.error("[compose-actions] uploadComposeAttachment failed:", error);
+    return { ok: false, error: "Something went wrong uploading the attachment. Please try again." };
+  }
+}
 
 /**
  * Headless core of composeEmail — no session, everything past the auth/
@@ -63,48 +163,120 @@ export async function composeEmailCore(
   contactId: string,
   subject: string,
   body: string,
-  opts?: { scheduledFor?: Date },
+  opts?: { scheduledFor?: Date; cc?: string[]; bcc?: string[]; attachmentDocumentIds?: string[] },
 ): Promise<{ ok: boolean; error?: string; draftId?: string }> {
+  const attachmentDocumentIds = (opts?.attachmentDocumentIds ?? []).filter(Boolean);
+
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  if (!contact || contact.organizationId !== organizationId) return { ok: false, error: "Contact not found." };
+  if (!contact || contact.organizationId !== organizationId) {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    return { ok: false, error: "Contact not found." };
+  }
+  if (contact.status === "UNSUBSCRIBED") {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    return { ok: false, error: "This contact has unsubscribed — cannot compose a new email to them." };
+  }
 
   const trimmedSubject = subject.trim();
   const trimmedBody = body.trim();
-  if (!trimmedSubject) return { ok: false, error: "Subject is required." };
-  if (!trimmedBody) return { ok: false, error: "Body is required." };
+  if (!trimmedSubject) {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    return { ok: false, error: "Subject is required." };
+  }
+  if (!trimmedBody) {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    return { ok: false, error: "Body is required." };
+  }
 
   let scheduledFor: Date | null = null;
   if (opts?.scheduledFor) {
-    if (Number.isNaN(opts.scheduledFor.getTime())) return { ok: false, error: "Invalid scheduled time." };
-    if (opts.scheduledFor.getTime() <= Date.now()) return { ok: false, error: "Scheduled time must be in the future." };
+    if (Number.isNaN(opts.scheduledFor.getTime())) {
+      await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+      return { ok: false, error: "Invalid scheduled time." };
+    }
+    if (opts.scheduledFor.getTime() <= Date.now()) {
+      await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+      return { ok: false, error: "Scheduled time must be in the future." };
+    }
     scheduledFor = opts.scheduledFor;
   }
 
-  const draft = await prisma.emailDraft.create({
-    data: {
-      organizationId,
-      contactId,
-      channel: "EMAIL",
-      purpose: "INTRODUCTION",
-      tone: "PROFESSIONAL",
-      subject: trimmedSubject,
-      body: trimmedBody,
-      status: "DRAFT",
-      scheduledFor,
-    },
-  });
+  const ccResult = validateEmailList(opts?.cc, "Cc");
+  if (!ccResult.ok) {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    return { ok: false, error: ccResult.error };
+  }
+  const bccResult = validateEmailList(opts?.bcc, "Bcc");
+  if (!bccResult.ok) {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    return { ok: false, error: bccResult.error };
+  }
+
+  let draftId: string;
+  try {
+    draftId = await prisma.$transaction(async (tx) => {
+      const draft = await tx.emailDraft.create({
+        data: {
+          organizationId,
+          contactId,
+          channel: "EMAIL",
+          purpose: "INTRODUCTION",
+          tone: "PROFESSIONAL",
+          subject: trimmedSubject,
+          body: trimmedBody,
+          status: "DRAFT",
+          scheduledFor,
+          cc: ccResult.value,
+          bcc: bccResult.value,
+        },
+      });
+
+      if (attachmentDocumentIds.length > 0) {
+        // Only ever links Documents that are (a) in this exact org and (b)
+        // still genuinely unlinked — a cross-org id, or one already attached
+        // to a different draft, simply won't match and the count check below
+        // rolls the whole draft back rather than silently under-linking.
+        const linked = await tx.document.updateMany({
+          where: { id: { in: attachmentDocumentIds }, organizationId, linkedEmailDraftId: null },
+          data: { linkedEmailDraftId: draft.id },
+        });
+        if (linked.count !== attachmentDocumentIds.length) {
+          throw new Error("ATTACHMENT_LINK_MISMATCH");
+        }
+      }
+
+      return draft.id;
+    });
+  } catch (error) {
+    await cleanupOrphanedAttachments(organizationId, attachmentDocumentIds);
+    if (error instanceof Error && error.message === "ATTACHMENT_LINK_MISMATCH") {
+      return {
+        ok: false,
+        error: "One or more attachments couldn't be linked — they may belong to a different organization or already be attached to another draft.",
+      };
+    }
+    console.error("[compose-actions] composeEmailCore failed:", error);
+    return { ok: false, error: "Something went wrong creating this draft. Please try again." };
+  }
 
   await logAudit({
     userId: authorUserId,
     organizationId,
     action: "outreach.draft_composed_manually",
-    metadata: { contactId, draftId: draft.id, scheduledFor: scheduledFor ? scheduledFor.toISOString() : null },
+    metadata: {
+      contactId,
+      draftId,
+      scheduledFor: scheduledFor ? scheduledFor.toISOString() : null,
+      ccCount: ccResult.value.length,
+      bccCount: bccResult.value.length,
+      attachmentCount: attachmentDocumentIds.length,
+    },
   });
 
   revalidatePath("/dashboard/outreach/inbox");
   revalidatePath(`/dashboard/outreach/contacts/${contactId}`);
 
-  return { ok: true, draftId: draft.id };
+  return { ok: true, draftId };
 }
 
 /** Session-gated Server Action wrapper — the real "Compose" affordance in the Inbox UI. */
@@ -112,7 +284,7 @@ export async function composeEmail(
   contactId: string,
   subject: string,
   body: string,
-  opts?: { scheduledFor?: Date },
+  opts?: { scheduledFor?: Date; cc?: string[]; bcc?: string[]; attachmentDocumentIds?: string[] },
 ): Promise<{ ok: boolean; error?: string; draftId?: string }> {
   const session = await auth();
   const userId = session?.user?.id;
@@ -165,6 +337,9 @@ export async function composeEmailWithAI(
 
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
   if (!contact || contact.organizationId !== membership.organizationId) return { ok: false, error: "Contact not found." };
+  if (contact.status === "UNSUBSCRIBED") {
+    return { ok: false, error: "This contact has unsubscribed — cannot generate a new draft for them." };
+  }
 
   if (!isAIConnected()) {
     return { ok: false, error: "AI is not connected — configure an API key (Gemini/Anthropic/Groq/OpenRouter) to use Write with AI." };
@@ -231,4 +406,60 @@ function summarizeTimelineForPrompt(timeline: Awaited<ReturnType<typeof getConta
 function truncate(text: string, maxLength: number): string {
   const trimmed = text.trim();
   return trimmed.length > maxLength ? `${trimmed.slice(0, maxLength)}…` : trimmed;
+}
+
+/**
+ * Headless core of cancelScheduledEmail — no session (Core/wrapper
+ * convention, matching composeEmailCore above).
+ *
+ * Deliberately reverts to a normal unscheduled APPROVED draft — NOT back to
+ * DRAFT. `scheduledFor` only ever controls WHEN an already-approved draft
+ * sends (see the EmailDraft.scheduledFor schema comment and
+ * runScheduledEmailSend's doc comment); the real Approval decision behind
+ * `status: "APPROVED"` (Approval.decision === "APPROVED",
+ * decidedByUserId/decidedAt on that row) genuinely happened and is not being
+ * undone by cancelling a send TIME. Reverting to DRAFT would misrepresent
+ * that a real approval never occurred. Rejecting/reversing the approval
+ * itself is the existing, distinct decideApproval action
+ * (approval-actions.ts) — this function doesn't touch it. Only a still-
+ * APPROVED (not yet QUEUED/SENT/etc.) scheduled draft can be cancelled —
+ * once runScheduledEmailSend has promoted it to QUEUED there is nothing left
+ * to cancel.
+ */
+export async function cancelScheduledEmailCore(
+  organizationId: string,
+  actingUserId: string,
+  draftId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  const draft = await prisma.emailDraft.findUnique({ where: { id: draftId } });
+  if (!draft || draft.organizationId !== organizationId) return { ok: false, error: "Draft not found." };
+  if (!draft.scheduledFor) return { ok: false, error: "This draft isn't scheduled." };
+  if (draft.status !== "APPROVED") {
+    return { ok: false, error: "This draft has already been queued or sent — its schedule can no longer be cancelled." };
+  }
+
+  await prisma.emailDraft.update({ where: { id: draftId }, data: { scheduledFor: null } });
+
+  await logAudit({
+    userId: actingUserId,
+    organizationId,
+    action: "outreach.scheduled_email_cancelled",
+    metadata: { draftId, previousScheduledFor: draft.scheduledFor.toISOString() },
+  });
+
+  revalidatePath("/dashboard/outreach/inbox");
+  revalidatePath(`/dashboard/outreach/contacts/${draft.contactId}`);
+  return { ok: true };
+}
+
+/** Session-gated Server Action wrapper — the real "Cancel" affordance on a Scheduled draft in the Inbox UI. */
+export async function cancelScheduledEmail(draftId: string): Promise<{ ok: boolean; error?: string }> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const membership = await resolveActiveMembership(userId);
+  if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+
+  return cancelScheduledEmailCore(membership.organizationId, userId, draftId);
 }

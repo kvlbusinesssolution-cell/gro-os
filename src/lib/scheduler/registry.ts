@@ -28,6 +28,7 @@ import { runCompanyResearchBacklog } from "@/lib/business-development/company-re
 import { runWebsiteIntelligenceSync } from "@/lib/business-development/website-intelligence-sync-job";
 import { runDecisionMakerSync } from "@/lib/business-development/decision-maker-sync-job";
 import { runPartnerDiscoverySync } from "@/lib/business-development/partner-discovery-sync-job";
+import { runScheduledEmailSend } from "@/lib/business-development/scheduled-send-job";
 import { runBackupScript } from "@/lib/ops/run-backup-script";
 import { runRestoreTest } from "@/lib/ops/restore-test";
 import type { JobDefinition, JobRunLog } from "./types";
@@ -966,6 +967,10 @@ async function partnerDiscoverySyncJob(): Promise<JobRunLog[]> {
   return runPartnerDiscoverySync();
 }
 
+async function scheduledEmailSendJob(): Promise<JobRunLog[]> {
+  return runScheduledEmailSend();
+}
+
 export const JOB_DEFINITIONS: JobDefinition[] = [
   {
     key: "daily-metric-snapshot",
@@ -1030,6 +1035,14 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: restoreTestRetentionCleanupJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
     priority: 5, // weekly bulk deletion housekeeping — lowest priority, no user waits on it
+  },
+  {
+    key: "scheduled-email-send",
+    name: "Scheduled email send",
+    cronExpression: "*/5 * * * *",
+    handler: scheduledEmailSendJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
+    priority: 2, // a human set a real wall-clock send time via Compose's Schedule action — shouldn't drift more than a few minutes late, same urgency tier as invoice-due-reminder/health-snapshot
   },
   {
     key: "sequence-advancement",

@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, XCircle, Send, ListChecks, ExternalLink, Eye } from "lucide-react";
+import { CheckCircle2, XCircle, Send, ListChecks, ExternalLink, Eye, CalendarX, Paperclip, Download } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -10,14 +10,40 @@ import { Badge } from "@/components/ui/badge";
 import { DraftStatusBadge } from "./draft-status-badge";
 import { EmailPreviewToggle } from "./email-preview-toggle";
 import { requestApproval, decideApproval, queueDraft, sendQueuedDraft, markLinkedInDraftSent } from "../_lib/approval-actions";
+import { cancelScheduledEmail } from "../_lib/compose-actions";
 import type { EmailDraft } from "@/generated/prisma/client";
 
 export interface DraftCardProps {
   draft: Pick<
     EmailDraft,
-    "id" | "channel" | "purpose" | "tone" | "subject" | "body" | "status" | "personalizationNotes" | "openCount" | "clickCount" | "abVariant"
-  > & { approvals?: Array<{ id: string; decision: string }> };
+    | "id"
+    | "channel"
+    | "purpose"
+    | "tone"
+    | "subject"
+    | "body"
+    | "status"
+    | "personalizationNotes"
+    | "openCount"
+    | "clickCount"
+    | "abVariant"
+    | "scheduledFor"
+    | "cc"
+    | "bcc"
+  > & {
+    approvals?: Array<{ id: string; decision: string }>;
+    // Only populated where the caller's query actually included it (today:
+    // the Inbox thread view via getContactTimeline) — every other DraftCard
+    // caller simply omits it and this section doesn't render.
+    attachments?: Array<{ id: string; name: string; sizeBytes: number; mimeType: string }>;
+  };
   canApprove: boolean;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 export function DraftCard({ draft, canApprove }: DraftCardProps) {
@@ -52,6 +78,13 @@ export function DraftCard({ draft, canApprove }: DraftCardProps) {
         </div>
 
         {draft.subject && <p className="text-sm font-medium text-foreground">{draft.subject}</p>}
+        {(draft.cc?.length > 0 || draft.bcc?.length > 0) && (
+          <p className="text-xs text-muted-foreground">
+            {draft.cc?.length > 0 && <span>Cc: {draft.cc.join(", ")}</span>}
+            {draft.cc?.length > 0 && draft.bcc?.length > 0 && <span> · </span>}
+            {draft.bcc?.length > 0 && <span>Bcc: {draft.bcc.join(", ")}</span>}
+          </p>
+        )}
         {showPreview ? (
           <EmailPreviewToggle subject={draft.subject} body={draft.body} />
         ) : (
@@ -72,6 +105,26 @@ export function DraftCard({ draft, canApprove }: DraftCardProps) {
                 Personalized: {note}
               </Badge>
             ))}
+          </div>
+        )}
+
+        {draft.attachments && draft.attachments.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-medium text-muted-foreground">Attachments</p>
+            <ul className="flex flex-col gap-1">
+              {draft.attachments.map((doc) => (
+                <li key={doc.id}>
+                  <a
+                    href={`/api/documents/${doc.id}`}
+                    className="flex w-fit items-center gap-1.5 text-xs text-primary hover:underline"
+                  >
+                    <Paperclip className="size-3" /> {doc.name}
+                    <span className="text-muted-foreground">({formatBytes(doc.sizeBytes)})</span>
+                    <Download className="size-3" />
+                  </a>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 
@@ -102,6 +155,19 @@ export function DraftCard({ draft, canApprove }: DraftCardProps) {
           {draft.status === "APPROVED" && (
             <Button size="sm" variant="outline" onClick={() => run(() => queueDraft(draft.id))} disabled={pending}>
               <ListChecks className="size-3.5" /> Queue
+            </Button>
+          )}
+          {draft.status === "APPROVED" && draft.scheduledFor && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                if (!confirm("Cancel this scheduled send? The draft stays approved — you can queue/send it manually anytime.")) return;
+                run(() => cancelScheduledEmail(draft.id));
+              }}
+              disabled={pending}
+            >
+              <CalendarX className="size-3.5" /> Cancel schedule
             </Button>
           )}
           {draft.status === "QUEUED" && draft.channel === "EMAIL" && (

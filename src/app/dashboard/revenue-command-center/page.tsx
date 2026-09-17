@@ -1,15 +1,37 @@
 import Link from "next/link";
-import { Gauge, Building2, ShieldCheck, Flame, Rocket, Mail, MessageSquare, CalendarCheck, FileText, Trophy, Wallet, HelpCircle } from "lucide-react";
+import {
+  Gauge,
+  Building2,
+  ShieldCheck,
+  Flame,
+  Rocket,
+  Mail,
+  MessageSquare,
+  CalendarCheck,
+  FileText,
+  Trophy,
+  Wallet,
+  HelpCircle,
+  Bot,
+  PenSquare,
+  Clock,
+  CheckCircle2,
+  AlertTriangle,
+  Users,
+} from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AnimatedCounter } from "@/components/ui/animated-counter";
 import { requireActiveMembership } from "../_lib/require-membership";
+import { formatCurrency as formatOrgCurrency } from "../_lib/format";
 import {
   computeRevenueCommandCenterToday,
   computeRevenueCommandCenterFunnel,
   emailCenterLinkForTile,
 } from "@/lib/business-development/revenue-command-center";
+import { getTodaysClientConversations } from "@/lib/business-development/todays-client-conversations";
 
 function formatCurrency(value: number | null): string {
   if (value === null) return "—";
@@ -31,16 +53,23 @@ const TODAY_TILES = [
   { key: "meetings", label: "Meetings", icon: CalendarCheck },
   { key: "proposals", label: "Proposals", icon: FileText },
   { key: "won", label: "Won", icon: Trophy },
+  { key: "aiDraftsCreated", label: "AI Drafts", icon: Bot },
+  { key: "humanDraftsCreated", label: "Human Drafts", icon: PenSquare },
+  { key: "pendingApproval", label: "Pending Approval", icon: Clock },
+  { key: "delivered", label: "Delivered", icon: CheckCircle2 },
+  { key: "failedEmails", label: "Failed", icon: AlertTriangle },
 ] as const;
 
 export default async function RevenueCommandCenterPage() {
   const { membership } = await requireActiveMembership("/dashboard/revenue-command-center");
   const organizationId = membership.organizationId;
 
-  const [today, funnel] = await Promise.all([
+  const [today, funnel, conversations] = await Promise.all([
     computeRevenueCommandCenterToday(organizationId),
     computeRevenueCommandCenterFunnel(organizationId),
+    getTodaysClientConversations(organizationId),
   ]);
+  const currency = membership.organization.currency;
 
   return (
     <main className="py-8">
@@ -113,7 +142,9 @@ export default async function RevenueCommandCenterPage() {
               <strong className="text-foreground">Ready for Outreach</strong> = qualified AND has a public Decision Maker identified
               (the two real preconditions the one-click &quot;Convert to Outreach&quot; action needs).{" "}
               <strong className="text-foreground">Won</strong> = deals currently in the Won stage last updated today — a best-effort
-              proxy, not an exact &quot;moved to Won today&quot; count.
+              proxy, not an exact &quot;moved to Won today&quot; count.{" "}
+              <strong className="text-foreground">Delivered</strong> = sent today and not bounced — this app has no
+              webhook-confirmed delivery event, so this is the closest honest proxy, not a true delivery receipt.
             </span>
           </p>
         </div>
@@ -149,6 +180,122 @@ export default async function RevenueCommandCenterPage() {
               </div>
             </CardContent>
           </Card>
+        </div>
+
+        <div>
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Today&apos;s Client Conversations
+          </h2>
+          {conversations.length === 0 ? (
+            <Card glass>
+              <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
+                <Users className="size-8 text-muted-foreground" strokeWidth={1.5} />
+                <p className="text-sm text-muted-foreground">
+                  No client activity yet today — once an email is sent or a reply comes in today, it&apos;ll show up
+                  here.
+                </p>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card glass>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Client</TableHead>
+                      <TableHead>Company</TableHead>
+                      <TableHead>Last Email</TableHead>
+                      <TableHead>Last Reply</TableHead>
+                      <TableHead>Intent</TableHead>
+                      <TableHead>Opportunity</TableHead>
+                      <TableHead>Deal</TableHead>
+                      <TableHead>Next Action</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {conversations.map((row) => (
+                      <TableRow key={row.contact.id}>
+                        <TableCell>
+                          <Link
+                            href={`/dashboard/outreach/inbox/${row.contact.id}`}
+                            className="font-medium text-foreground transition-colors hover:text-primary"
+                          >
+                            {row.contact.firstName} {row.contact.lastName ?? ""}
+                          </Link>
+                        </TableCell>
+                        <TableCell>
+                          {row.company ? (
+                            <Link
+                              href={`/dashboard/companies/${row.company.id}`}
+                              className="text-sm text-foreground transition-colors hover:text-primary"
+                            >
+                              {row.company.name}
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No company on file</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap text-sm text-muted-foreground">
+                          {row.lastEmailAt ? row.lastEmailAt.toLocaleString() : "—"}
+                        </TableCell>
+                        <TableCell className="max-w-xs">
+                          {row.lastReplyPreview ? (
+                            <div>
+                              <p className="line-clamp-2 text-sm text-foreground">{row.lastReplyPreview}</p>
+                              <p className="text-xs text-muted-foreground">{row.lastReplyAt?.toLocaleString()}</p>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">No reply yet</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {row.intent ? (
+                            <span className="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-xs font-medium text-foreground">
+                              {row.intent}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">—</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {row.opportunity ? (
+                            <Link
+                              href={`/dashboard/opportunities/${row.opportunity.id}`}
+                              className="text-sm text-foreground transition-colors hover:text-primary"
+                            >
+                              {row.opportunity.title}
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">None yet</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          {row.deal ? (
+                            <Link
+                              href={`/dashboard/crm/deals/${row.deal.id}`}
+                              className="text-sm text-foreground transition-colors hover:text-primary"
+                            >
+                              {row.deal.name}
+                              {row.deal.value !== null && (
+                                <span className="ml-1 text-xs text-muted-foreground">
+                                  ({formatOrgCurrency(row.deal.value, currency)})
+                                </span>
+                              )}
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">None yet</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="max-w-[160px]">
+                          <p className="text-sm text-muted-foreground">{row.nextAction}</p>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </Container>
     </main>

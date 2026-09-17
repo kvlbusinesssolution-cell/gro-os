@@ -15,8 +15,9 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/auth";
 import { isAIConnected } from "@/lib/ai/client";
+import { deleteDocumentFile } from "@/lib/storage/documents";
 
-import { composeEmailCore, composeEmailWithAI } from "./compose-actions";
+import { composeEmailCore, composeEmailWithAI, uploadComposeAttachment } from "./compose-actions";
 
 // Real local-Postgres integration test (no mocking of Prisma), same
 // convention as reply-actions.test.ts. Everything is scoped under two
@@ -184,6 +185,154 @@ describe("compose-actions", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("Scheduled time must be in the future.");
     expect(result.draftId).toBeUndefined();
+  });
+
+  it("persists real, validated Cc/Bcc addresses — trimmed, lowercased, de-duplicated", async () => {
+    const result = await composeEmailCore(orgId, userId, contactId, "Cc/Bcc subject", "Cc/Bcc body.", {
+      cc: ["  Manager@Example.com  ", "manager@example.com", "second@example.com"],
+      bcc: [" records@example.com "],
+    });
+
+    expect(result.ok).toBe(true);
+    const draft = await prisma.emailDraft.findUniqueOrThrow({ where: { id: result.draftId! } });
+    expect(draft.cc.sort()).toEqual(["manager@example.com", "second@example.com"].sort());
+    expect(draft.bcc).toEqual(["records@example.com"]);
+  });
+
+  it("omits Cc/Bcc as empty arrays (never null) when not provided", async () => {
+    const result = await composeEmailCore(orgId, userId, contactId, "No cc/bcc subject", "No cc/bcc body.");
+    expect(result.ok).toBe(true);
+    const draft = await prisma.emailDraft.findUniqueOrThrow({ where: { id: result.draftId! } });
+    expect(draft.cc).toEqual([]);
+    expect(draft.bcc).toEqual([]);
+  });
+
+  it("rejects an invalid email address in Cc with a clear error and creates no draft", async () => {
+    const draftCountBefore = await prisma.emailDraft.count({ where: { organizationId: orgId } });
+    const result = await composeEmailCore(orgId, userId, contactId, "Subject", "Body", {
+      cc: ["not-a-real-email"],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Cc has an invalid email address: "not-a-real-email".');
+    expect(result.draftId).toBeUndefined();
+
+    const draftCountAfter = await prisma.emailDraft.count({ where: { organizationId: orgId } });
+    expect(draftCountAfter).toBe(draftCountBefore);
+  });
+
+  it("rejects an invalid email address in Bcc with a clear error", async () => {
+    const result = await composeEmailCore(orgId, userId, contactId, "Subject", "Body", {
+      bcc: ["also-not-real"],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Bcc has an invalid email address: "also-not-real".');
+    expect(result.draftId).toBeUndefined();
+  });
+
+  it("uploads and links a real attachment to a newly composed draft — genuinely retrievable afterward", async () => {
+    const fileBytes = new TextEncoder().encode("Real attachment content for the compose-actions test.");
+    const file = new File([fileBytes], "test-attachment.txt", { type: "text/plain" });
+    const formData = new FormData();
+    formData.set("file", file);
+
+    const uploadResult = await uploadComposeAttachment(formData);
+    expect(uploadResult.ok).toBe(true);
+    expect(uploadResult.documentId).toBeTruthy();
+
+    const unlinkedDoc = await prisma.document.findUniqueOrThrow({ where: { id: uploadResult.documentId! } });
+    expect(unlinkedDoc.linkedEmailDraftId).toBeNull();
+    expect(unlinkedDoc.organizationId).toBe(orgId);
+    expect(unlinkedDoc.name).toBe("test-attachment.txt");
+
+    const composeResult = await composeEmailCore(orgId, userId, contactId, "Subject with an attachment", "Body with an attachment.", {
+      attachmentDocumentIds: [uploadResult.documentId!],
+    });
+    expect(composeResult.ok).toBe(true);
+
+    // Genuinely retrievable via a fresh, independent query — not just the
+    // in-memory result of the create call above.
+    const draftWithAttachments = await prisma.emailDraft.findUniqueOrThrow({
+      where: { id: composeResult.draftId! },
+      include: { attachments: true },
+    });
+    expect(draftWithAttachments.attachments).toHaveLength(1);
+    expect(draftWithAttachments.attachments[0].id).toBe(uploadResult.documentId);
+    expect(draftWithAttachments.attachments[0].name).toBe("test-attachment.txt");
+
+    const linkedDoc = await prisma.document.findUniqueOrThrow({ where: { id: uploadResult.documentId! } });
+    expect(linkedDoc.linkedEmailDraftId).toBe(composeResult.draftId);
+
+    // Real file this test actually wrote to disk — clean it up.
+    await deleteDocumentFile(linkedDoc.storageKey).catch(() => undefined);
+  });
+
+  it("never links (or deletes) a Document belonging to a different organization, and rolls back the whole draft", async () => {
+    const foreignDoc = await prisma.document.create({
+      data: { organizationId: otherOrgId, name: "foreign-doc.txt", storageKey: "", mimeType: "text/plain", sizeBytes: 42 },
+    });
+
+    const draftCountBefore = await prisma.emailDraft.count({ where: { organizationId: orgId } });
+
+    const result = await composeEmailCore(orgId, userId, contactId, "Cross-org attachment attempt", "Body.", {
+      attachmentDocumentIds: [foreignDoc.id],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("different organization");
+    expect(result.draftId).toBeUndefined();
+
+    const draftCountAfter = await prisma.emailDraft.count({ where: { organizationId: orgId } });
+    expect(draftCountAfter).toBe(draftCountBefore);
+
+    // Tenant isolation: the foreign-org Document is untouched — not linked,
+    // not deleted, still exactly where it started.
+    const stillThere = await prisma.document.findUniqueOrThrow({ where: { id: foreignDoc.id } });
+    expect(stillThere.linkedEmailDraftId).toBeNull();
+    expect(stillThere.organizationId).toBe(otherOrgId);
+
+    await prisma.document.delete({ where: { id: foreignDoc.id } });
+  });
+
+  it("rejects composing a new email to an unsubscribed contact", async () => {
+    const unsubscribed = await prisma.contact.create({
+      data: {
+        organizationId: orgId,
+        firstName: "Unsub",
+        lastName: "Contact",
+        email: `unsub-compose-${Date.now()}@example.com`,
+        status: "UNSUBSCRIBED",
+      },
+    });
+
+    const draftCountBefore = await prisma.emailDraft.count({ where: { organizationId: orgId } });
+    const result = await composeEmailCore(orgId, userId, unsubscribed.id, "Subject", "Body");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("This contact has unsubscribed — cannot compose a new email to them.");
+    expect(result.draftId).toBeUndefined();
+
+    const draftCountAfter = await prisma.emailDraft.count({ where: { organizationId: orgId } });
+    expect(draftCountAfter).toBe(draftCountBefore);
+  });
+
+  it("composeEmailWithAI refuses to generate content for an unsubscribed contact", async () => {
+    const unsubscribed = await prisma.contact.create({
+      data: {
+        organizationId: orgId,
+        firstName: "Unsub",
+        lastName: "AI",
+        email: `unsub-ai-${Date.now()}@example.com`,
+        status: "UNSUBSCRIBED",
+      },
+    });
+
+    const result = await composeEmailWithAI(unsubscribed.id);
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("This contact has unsubscribed — cannot generate a new draft for them.");
+    expect(result.subject).toBeUndefined();
+    expect(result.body).toBeUndefined();
   });
 
   it("composeEmailWithAI requires a signed-in session", async () => {

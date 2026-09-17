@@ -4877,6 +4877,12 @@ model EmailDraft {
   tone                 EmailTone
   subject              String?
   body                 String       @db.Text
+  // Email Center Phase 3 — real CC/BCC recipients, persisted and actually
+  // passed to the send provider (src/lib/outreach/email-provider.ts).
+  // Empty array (never null) when unused — matches this schema's existing
+  // String[] convention elsewhere (e.g. Company.technologies).
+  cc                   String[]     @default([])
+  bcc                  String[]     @default([])
   // Which real fields were actually woven in — powers "Highlight
   // personalization" in the preview UI, never fabricated after the fact.
   personalizationNotes Json?
