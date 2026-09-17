@@ -16,9 +16,16 @@ export interface AnimatedCounterProps {
 }
 
 /**
- * Count-up number that animates from 0 to `value` once it scrolls into
- * view. Uses a spring-driven motion value so the animation feels natural
- * rather than linear.
+ * Count-up number that animates from 0 to `value`. Prefers animating once
+ * the element scrolls into view (the intended marketing-page effect), but
+ * always falls back to animating on mount/value-change regardless of
+ * `isInView` — confirmed via a real production screenshot that relying on
+ * `useInView` alone can leave a real, already-on-screen dashboard number
+ * (e.g. "Sent today", "Campaigns") permanently stuck at its initial 0,
+ * which is far worse for a real business dashboard than losing the
+ * scroll-triggered flourish for the rare case both paths fire. The two
+ * effects below are idempotent together — whichever fires reflects the
+ * same real `value`.
  */
 function AnimatedCounter({
   value,
@@ -45,6 +52,12 @@ function AnimatedCounter({
       motionValue.set(value);
     }
   }, [isInView, motionValue, value]);
+
+  // Reliability fallback — see doc comment above. Runs on every mount and
+  // whenever `value` changes, independent of `isInView` ever firing.
+  React.useEffect(() => {
+    motionValue.set(value);
+  }, [motionValue, value]);
 
   React.useEffect(() => {
     const unsubscribe = springValue.on("change", (latest) => {
