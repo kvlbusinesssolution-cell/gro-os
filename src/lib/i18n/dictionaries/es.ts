@@ -8,6 +8,7 @@ export const es: Dictionary = {
   "nav.companyDiscovery": "Descubrimiento de Empresas",
   "nav.opportunities": "Oportunidades de IA",
   "nav.priorityQueue": "Cola de Prioridades de IA",
+  "nav.revenueCommandCenter": "Centro de Mando de Ingresos",
   "nav.clients": "Clientes",
   "nav.promptLibrary": "Biblioteca de Prompts",
   "nav.hr": "RRHH",

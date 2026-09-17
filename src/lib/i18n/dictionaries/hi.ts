@@ -8,6 +8,7 @@ export const hi: Dictionary = {
   "nav.companyDiscovery": "कंपनी खोज",
   "nav.opportunities": "एआई अवसर",
   "nav.priorityQueue": "एआई प्राथमिकता कतार",
+  "nav.revenueCommandCenter": "राजस्व कमांड सेंटर",
   "nav.clients": "क्लाइंट्स",
   "nav.promptLibrary": "प्रॉम्प्ट लाइब्रेरी",
   "nav.hr": "एचआर",

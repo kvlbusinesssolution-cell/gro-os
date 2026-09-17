@@ -8,6 +8,7 @@ export const zh: Dictionary = {
   "nav.companyDiscovery": "公司发现",
   "nav.opportunities": "AI 机会",
   "nav.priorityQueue": "AI 优先队列",
+  "nav.revenueCommandCenter": "收入指挥中心",
   "nav.clients": "客户",
   "nav.promptLibrary": "提示词库",
   "nav.hr": "人力资源",

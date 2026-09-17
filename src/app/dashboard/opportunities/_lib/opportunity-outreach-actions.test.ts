@@ -12,14 +12,14 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 import { prisma } from "@/lib/prisma";
 import { isAIConnected } from "@/lib/ai/client";
 
+import { convertOpportunityToOutreachCore } from "./opportunity-outreach-actions";
 import {
-  convertOpportunityToOutreachCore,
   DEFAULT_SEQUENCE_STEPS,
   DEFAULT_SEQUENCE_STEPS_LINKEDIN_FIRST,
   OUTREACH_CAMPAIGN_NAME,
   OUTREACH_SEQUENCE_NAME,
   OUTREACH_SEQUENCE_NAME_LINKEDIN,
-} from "./opportunity-outreach-actions";
+} from "./opportunity-outreach-constants";
 
 // Real local-Postgres integration test (no mocking of Prisma, matching the
 // rest of this repo's Prisma-touching code) — everything scoped under two

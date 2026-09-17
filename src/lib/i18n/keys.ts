@@ -20,6 +20,7 @@ export const en = {
   "nav.companyDiscovery": "Company Discovery",
   "nav.opportunities": "AI Opportunities",
   "nav.priorityQueue": "AI Priority Queue",
+  "nav.revenueCommandCenter": "Revenue Command Center",
   "nav.clients": "Clients",
   "nav.promptLibrary": "Prompt Library",
   "nav.hr": "HR",

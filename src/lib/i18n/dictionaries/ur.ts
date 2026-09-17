@@ -8,6 +8,7 @@ export const ur: Dictionary = {
   "nav.companyDiscovery": "کمپنی کی دریافت",
   "nav.opportunities": "اے آئی مواقع",
   "nav.priorityQueue": "اے آئی ترجیحی قطار",
+  "nav.revenueCommandCenter": "ریونیو کمانڈ سینٹر",
   "nav.clients": "کلائنٹس",
   "nav.promptLibrary": "پرامپٹ لائبریری",
   "nav.hr": "ایچ آر",

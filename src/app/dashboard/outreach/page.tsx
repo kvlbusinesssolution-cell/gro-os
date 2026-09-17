@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Megaphone, Users } from "lucide-react";
+import { Inbox, Megaphone, Users } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,6 +51,9 @@ export default async function OutreachPage() {
           <div className="flex items-center gap-3">
             <Link href="/dashboard/outreach/contacts" className="flex items-center gap-1.5 text-sm text-primary hover:underline">
               <Users className="size-4" /> Contacts
+            </Link>
+            <Link href="/dashboard/outreach/inbox" className="flex items-center gap-1.5 text-sm text-primary hover:underline">
+              <Inbox className="size-4" /> Inbox
             </Link>
             <OutreachExportMenu />
             <CampaignForm />

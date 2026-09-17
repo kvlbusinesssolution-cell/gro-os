@@ -36,6 +36,7 @@ import {
   Briefcase,
   LifeBuoy,
   Share2,
+  Gauge,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -50,6 +51,7 @@ const LINKS = [
   { href: "/dashboard/company-discovery", labelKey: "nav.companyDiscovery", icon: Radar },
   { href: "/dashboard/opportunities", labelKey: "nav.opportunities", icon: Target },
   { href: "/dashboard/priority-queue", labelKey: "nav.priorityQueue", icon: ListOrdered },
+  { href: "/dashboard/revenue-command-center", labelKey: "nav.revenueCommandCenter", icon: Gauge },
   { href: "/dashboard/clients", labelKey: "nav.clients", icon: HeartPulse },
   { href: "/dashboard/lead-finder", labelKey: "nav.leadFinder", icon: UserSearch },
   { href: "/dashboard/client-finder", labelKey: "nav.clientFinder", icon: Handshake },

@@ -8,6 +8,7 @@ export const ja: Dictionary = {
   "nav.companyDiscovery": "企業発見",
   "nav.opportunities": "AIチャンス",
   "nav.priorityQueue": "AI優先キュー",
+  "nav.revenueCommandCenter": "収益コマンドセンター",
   "nav.clients": "クライアント",
   "nav.promptLibrary": "プロンプトライブラリ",
   "nav.hr": "人事",
