@@ -86,7 +86,9 @@ export async function generateEmailDraft(params: GenerateDraftParams): Promise<E
 
   try {
     const result = await generateStructured({
-      system: `${persona.systemPrompt}\n\nWrite ${PURPOSE_LABEL[params.purpose]}, in a ${TONE_LABEL[params.tone]} tone. ${channelInstructions} Only reference facts present in the context below — if there's no real researched pain point or tech-stack detail, write a genuinely short, honest, generic-but-still-personal intro rather than inventing a fact. List in personalizationNotes exactly which real facts you actually used (e.g. "mentioned their industry", "referenced a real researched pain point") — if you used none, return an empty array, never a fabricated note.`,
+      system: `${persona.systemPrompt}\n\nWrite ${PURPOSE_LABEL[params.purpose]}, in a ${TONE_LABEL[params.tone]} tone. ${channelInstructions} Only reference facts present in the context below — if there's no real researched pain point or tech-stack detail, write a genuinely short, honest, generic-but-still-personal intro rather than inventing a fact. List in personalizationNotes exactly which real facts you actually used (e.g. "mentioned their industry", "referenced a real researched pain point") — if you used none, return an empty array, never a fabricated note.
+
+Writing quality bar — this represents KVL Business Solutions to a real prospect, so it must read like it was written by a sharp, respectful human, not a generic AI template: plain, natural sentences (no corporate filler like "I hope this email finds you well", "in today's fast-paced world", "leverage synergies", "unlock potential"); vary sentence length instead of a flat rhythm; exactly one clear, low-friction ask, never a laundry list of questions; confident and warm, never pushy, salesy, or apologetic. Read it back mentally as if you were the recipient — if it sounds like spam or a mail-merge blast, rewrite it.`,
       userContent: `Real context about this contact:\n\n${context}\n\nWrite the ${params.channel === "LINKEDIN" ? "LinkedIn message" : "email"} now.`,
       maxTokens: 1500,
       effort: "low",
