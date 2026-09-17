@@ -77,7 +77,12 @@ export async function generateEmailDraft(params: GenerateDraftParams): Promise<E
   const channelInstructions =
     params.channel === "LINKEDIN"
       ? "This is a LinkedIn message, not an email — do NOT include a subject line. Keep it under 300 characters, conversational, no email-style greeting/signature block."
-      : "This is a real cold email. Include a short, specific subject line (never generic like 'Quick question').";
+      : // A real production bug, confirmed via an actual sent email: the model
+        // would sometimes end with a bare "Best regards," and stop, with no
+        // name after it — an incomplete-looking sign-off. Nobody's real name
+        // is known here (never invent one), but the real company name is —
+        // require the body to close with it every time.
+        "This is a real cold email. Include a short, specific subject line (never generic like 'Quick question'). The body MUST end with a complete sign-off — never leave a closing line like \"Best regards,\" dangling with nothing after it. Sign off with the real company name \"KVL Business Solutions\" (e.g. \"Best regards,\\nKVL Business Solutions\") — never invent a specific person's name, since no individual sender name is provided in this context.";
 
   try {
     const result = await generateStructured({
