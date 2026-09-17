@@ -5,6 +5,9 @@ export const zh: Dictionary = {
   "nav.aiCommandCenter": "AI 指挥中心",
   "nav.board": "AI 执行委员会",
   "nav.companies": "公司",
+  "nav.companyDiscovery": "公司发现",
+  "nav.opportunities": "AI 机会",
+  "nav.priorityQueue": "AI 优先队列",
   "nav.clients": "客户",
   "nav.promptLibrary": "提示词库",
   "nav.hr": "人力资源",
@@ -29,6 +32,7 @@ export const zh: Dictionary = {
   "nav.marketplace": "应用市场",
   "nav.agency": "代理商门户",
   "nav.partner": "合作伙伴计划",
+  "nav.referralPartners": "推荐合作伙伴",
   "nav.settings": "设置",
 
   "topnav.search": "搜索全部…",

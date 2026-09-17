@@ -7,7 +7,9 @@ import { Badge } from "@/components/ui/badge";
 import { prisma } from "@/lib/prisma";
 import { requireActiveMembership } from "../_lib/require-membership";
 import { getOutreachDashboardStats } from "@/lib/outreach/campaign-analytics";
+import { getKvlOutreachSummary } from "@/lib/business-development/kvl-sector-discovery-job";
 import { OutreachStatsStrip } from "./_components/outreach-stats-strip";
+import { KvlOutreachSummaryCard } from "./_components/kvl-outreach-summary";
 import { CampaignForm } from "./_components/campaign-form";
 import { OutreachExportMenu } from "./_components/outreach-export-menu";
 
@@ -22,7 +24,7 @@ const CAMPAIGN_STATUS_VARIANT: Record<string, "outline" | "accent" | "default" |
 export default async function OutreachPage() {
   const { membership } = await requireActiveMembership("/dashboard/outreach");
 
-  const [stats, campaigns] = await Promise.all([
+  const [stats, campaigns, kvlSummary] = await Promise.all([
     getOutreachDashboardStats(membership.organizationId),
     prisma.campaign.findMany({
       where: { organizationId: membership.organizationId },
@@ -30,6 +32,7 @@ export default async function OutreachPage() {
       take: 24,
       include: { _count: { select: { contacts: true, emailDrafts: true } } },
     }),
+    getKvlOutreachSummary(membership.organizationId),
   ]);
 
   return (
@@ -53,6 +56,8 @@ export default async function OutreachPage() {
             <CampaignForm />
           </div>
         </div>
+
+        {kvlSummary && <KvlOutreachSummaryCard summary={kvlSummary} />}
 
         <OutreachStatsStrip stats={stats} />
 

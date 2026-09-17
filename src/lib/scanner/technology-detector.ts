@@ -8,7 +8,19 @@ import type { ParsedHtml } from "./html-parser";
  * reasonable, honestly-scoped signature set covering the brief's examples.
  */
 
-export type TechnologyCategory = "FRONTEND" | "BACKEND" | "CMS" | "ECOMMERCE" | "HOSTING" | "CDN" | "ANALYTICS" | "OTHER";
+export type TechnologyCategory =
+  | "FRONTEND"
+  | "BACKEND"
+  | "CMS"
+  | "ECOMMERCE"
+  | "HOSTING"
+  | "CDN"
+  | "ANALYTICS"
+  | "PAYMENT"
+  | "BOOKING"
+  | "CRM_INDICATOR"
+  | "MESSAGING"
+  | "OTHER";
 
 export interface TechnologyFinding {
   name: string;
@@ -88,6 +100,35 @@ const SIGNATURES: SignatureRule[] = [
   { name: "Google Analytics", category: "ANALYTICS", test: (ctx) => scriptSrcMatches(ctx, "googletagmanager.com") ?? scriptSrcMatches(ctx, "google-analytics.com") },
   { name: "Meta Pixel", category: "ANALYTICS", test: (ctx) => htmlIncludes(ctx, "connect.facebook.net") },
   { name: "Hotjar", category: "ANALYTICS", test: (ctx) => scriptSrcMatches(ctx, "hotjar.com") },
+
+  // Payment gateways — matched on each provider's real checkout/JS-SDK script host.
+  { name: "Razorpay", category: "PAYMENT", test: (ctx) => scriptSrcMatches(ctx, "checkout.razorpay.com") },
+  { name: "Stripe", category: "PAYMENT", test: (ctx) => scriptSrcMatches(ctx, "js.stripe.com") },
+  { name: "PayPal", category: "PAYMENT", test: (ctx) => scriptSrcMatches(ctx, "paypalobjects.com") ?? scriptSrcMatches(ctx, "paypal.com/sdk/js") },
+  { name: "PayU", category: "PAYMENT", test: (ctx) => scriptSrcMatches(ctx, "jssdk.payu.in") },
+  { name: "Instamojo", category: "PAYMENT", test: (ctx) => scriptSrcMatches(ctx, "js.instamojo.com") },
+  // CCAvenue's seamless integration has no client-side SDK script — it posts to this transaction endpoint as the form action, so this is a raw-HTML substring match rather than a parsed script tag.
+  { name: "CCAvenue", category: "PAYMENT", test: (ctx) => htmlIncludes(ctx, "secure.ccavenue.com/transaction/transaction.do", "CCAvenue transaction form action") },
+
+  // Booking / scheduling widgets — matched on each provider's embed script host, with a raw-HTML fallback for iframe-only embeds.
+  { name: "Calendly", category: "BOOKING", test: (ctx) => scriptSrcMatches(ctx, "assets.calendly.com") ?? htmlIncludes(ctx, "calendly.com/", "Calendly booking link/iframe") },
+  { name: "Acuity Scheduling", category: "BOOKING", test: (ctx) => scriptSrcMatches(ctx, "embed.acuityscheduling.com") ?? htmlIncludes(ctx, "acuityscheduling.com", "Acuity Scheduling iframe/link") },
+  { name: "Cal.com", category: "BOOKING", test: (ctx) => scriptSrcMatches(ctx, "app.cal.com/embed") ?? htmlIncludes(ctx, "cal.com/embed", "Cal.com embed reference") },
+  // Setmore's embed code is account-specific (no shared script host) — booking pages always live at a "<account>.setmore.com" subdomain, so that's the only stable, honest substring to match.
+  { name: "Setmore", category: "BOOKING", test: (ctx) => htmlIncludes(ctx, ".setmore.com", "Setmore booking page link") },
+
+  // CRM indicators — tracking scripts and web-to-lead form endpoints that only exist when a CRM is wired up.
+  { name: "HubSpot", category: "CRM_INDICATOR", test: (ctx) => scriptSrcMatches(ctx, "js.hs-scripts.com") ?? scriptSrcMatches(ctx, "js.hsforms.net") },
+  // Salesforce Web-to-Lead forms always post to this exact endpoint — no client-side SDK to match on.
+  { name: "Salesforce", category: "CRM_INDICATOR", test: (ctx) => htmlIncludes(ctx, "webto.salesforce.com/servlet/servlet.WebToLead", "Salesforce Web-to-Lead form action") },
+  // Zoho CRM's embedded webforms post to this endpoint.
+  { name: "Zoho CRM", category: "CRM_INDICATOR", test: (ctx) => htmlIncludes(ctx, "crm.zoho.com/crm/WebToLeadForm", "Zoho CRM Web-to-Lead form action") },
+
+  // Messaging widgets
+  { name: "WhatsApp Click-to-Chat", category: "MESSAGING", test: (ctx) => htmlIncludes(ctx, "wa.me/", "WhatsApp click-to-chat link") ?? htmlIncludes(ctx, "api.whatsapp.com", "WhatsApp API link") },
+  { name: "Intercom", category: "MESSAGING", test: (ctx) => scriptSrcMatches(ctx, "widget.intercom.io") },
+  { name: "Tidio", category: "MESSAGING", test: (ctx) => scriptSrcMatches(ctx, "code.tidio.co") },
+  { name: "Crisp", category: "MESSAGING", test: (ctx) => scriptSrcMatches(ctx, "client.crisp.chat") },
 ];
 
 /** Runs every documented signature rule and returns only real matches, each carrying its evidence. */

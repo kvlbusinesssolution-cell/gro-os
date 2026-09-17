@@ -22,7 +22,12 @@ import { sendEmail } from "@/lib/email";
 import { evaluateAlerts } from "@/lib/alerts/engine";
 import { runAndRecordFullSystemCheck } from "@/lib/monitoring/aggregate";
 import { runLeadDiscoveryForAllOrganizations } from "@/lib/business-development/discovery-job";
+import { runKvlCountryOutreach, runKvlDailyCatchup, sendKvlDailyReport } from "@/lib/business-development/kvl-sector-discovery-job";
+import { runKvlReplySync } from "@/lib/business-development/kvl-reply-sync-job";
 import { runCompanyResearchBacklog } from "@/lib/business-development/company-research-job";
+import { runWebsiteIntelligenceSync } from "@/lib/business-development/website-intelligence-sync-job";
+import { runDecisionMakerSync } from "@/lib/business-development/decision-maker-sync-job";
+import { runPartnerDiscoverySync } from "@/lib/business-development/partner-discovery-sync-job";
 import { runBackupScript } from "@/lib/ops/run-backup-script";
 import { runRestoreTest } from "@/lib/ops/restore-test";
 import type { JobDefinition, JobRunLog } from "./types";
@@ -913,13 +918,52 @@ async function leadDiscoveryJob(): Promise<JobRunLog[]> {
   );
 }
 
+function kvlCountryOutreachJob(groupKey: string): () => Promise<JobRunLog[]> {
+  return () => runKvlCountryOutreach(groupKey);
+}
+
+async function kvlDailyCatchupJob(): Promise<JobRunLog[]> {
+  return runKvlDailyCatchup();
+}
+
+async function kvlDailyReportJob(): Promise<JobRunLog[]> {
+  return sendKvlDailyReport();
+}
+
+async function kvlReplySyncJob(): Promise<JobRunLog[]> {
+  return runKvlReplySync();
+}
+
 async function companyResearchBacklogJob(): Promise<JobRunLog[]> {
   const summaries = await runCompanyResearchBacklog();
-  return summaries.map((s) =>
-    s.skippedReason
-      ? { level: "warn", message: `Skipped: ${s.skippedReason}.` }
-      : { level: "info", message: `${s.processed} companies researched, ${s.failed} failed.`, organizationId: s.organizationId },
-  );
+  const logs: JobRunLog[] = [];
+  for (const s of summaries) {
+    if (s.skippedReason) {
+      logs.push({ level: "warn", message: `Skipped: ${s.skippedReason}.` });
+      continue;
+    }
+    logs.push({
+      level: "info",
+      message: `${s.processed} companies researched, ${s.failed} failed, ${s.intentScoresComputed} intent score(s) computed, ${s.opportunityScoresComputed} opportunity score(s) computed.`,
+      organizationId: s.organizationId,
+    });
+    for (const scoringError of s.scoringErrors) {
+      logs.push({ level: "error", message: scoringError, organizationId: s.organizationId });
+    }
+  }
+  return logs;
+}
+
+async function websiteIntelligenceSyncJob(): Promise<JobRunLog[]> {
+  return runWebsiteIntelligenceSync();
+}
+
+async function decisionMakerSyncJob(): Promise<JobRunLog[]> {
+  return runDecisionMakerSync();
+}
+
+async function partnerDiscoverySyncJob(): Promise<JobRunLog[]> {
+  return runPartnerDiscoverySync();
 }
 
 export const JOB_DEFINITIONS: JobDefinition[] = [
@@ -1051,6 +1095,100 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
     priority: 4, // opt-in, non-urgent — runs before the research/scoring backlog job so newly-found companies have something to process
   },
+  // KVL sector outreach, split by target country's own business hours
+  // (10:30am local) rather than one fixed IST time — see
+  // kvl-sector-discovery-job.ts's top comment and COUNTRY_GROUPS. `tz` is
+  // genuinely honored per-job by the active BullMQ scheduler provider
+  // (scheduler/init.ts), so each of these really fires at 10:30am in ITS
+  // OWN zone, not 10:30am IST for all six.
+  {
+    key: "kvl-outreach-india",
+    name: "KVL business-hours outreach — India",
+    cronExpression: "30 10 * * *",
+    timezone: "Asia/Kolkata",
+    handler: kvlCountryOutreachJob("india"),
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  {
+    key: "kvl-outreach-uae",
+    name: "KVL business-hours outreach — UAE",
+    cronExpression: "30 10 * * *",
+    timezone: "Asia/Dubai",
+    handler: kvlCountryOutreachJob("uae"),
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  {
+    key: "kvl-outreach-saudi",
+    name: "KVL business-hours outreach — Saudi Arabia",
+    cronExpression: "30 10 * * *",
+    timezone: "Asia/Riyadh",
+    handler: kvlCountryOutreachJob("saudi"),
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  {
+    key: "kvl-outreach-usa",
+    name: "KVL business-hours outreach — USA",
+    cronExpression: "30 10 * * *",
+    timezone: "America/New_York",
+    handler: kvlCountryOutreachJob("usa"),
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  {
+    key: "kvl-outreach-uk",
+    name: "KVL business-hours outreach — UK",
+    cronExpression: "30 10 * * *",
+    timezone: "Europe/London",
+    handler: kvlCountryOutreachJob("uk"),
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  {
+    key: "kvl-outreach-malaysia",
+    name: "KVL business-hours outreach — Malaysia",
+    cronExpression: "30 10 * * *",
+    timezone: "Asia/Kuala_Lumpur",
+    handler: kvlCountryOutreachJob("malaysia"),
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  // 8pm IST — tops up to the 20/day floor if the 6 business-hours runs above
+  // came in short (see runKvlDailyCatchup's doc comment).
+  {
+    key: "kvl-daily-catchup",
+    name: "KVL daily outreach catch-up (20/day floor)",
+    cronExpression: "0 20 * * *",
+    timezone: "Asia/Kolkata",
+    handler: kvlDailyCatchupJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  // 9pm IST — the one daily owner-facing report, after every country run and
+  // the catch-up have had their chance to run.
+  {
+    key: "kvl-daily-report",
+    name: "KVL daily outreach report to owner",
+    cronExpression: "0 21 * * *",
+    timezone: "Asia/Kolkata",
+    handler: kvlDailyReportJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4,
+  },
+  // Every 30 minutes — real IMAP read of sales@kvlbusinesssolutions.com
+  // (KVL_IMAP_* env vars) so a prospect's reply becomes a real Reply record
+  // (with AI sentiment) automatically, not just a "check your inbox
+  // yourself" line in the daily report. Skips cleanly if unconfigured.
+  {
+    key: "kvl-reply-sync",
+    name: "KVL sales inbox reply sync",
+    cronExpression: "*/30 * * * *",
+    handler: kvlReplySyncJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 3, // real inbound leads/replies — worth checking more promptly than the once-a-day jobs above
+  },
   {
     key: "company-research-backlog",
     name: "Company research backlog",
@@ -1058,6 +1196,30 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: companyResearchBacklogJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
     priority: 4, // opt-in, bounded batch (5 companies/org/run) — steady background progress, not time-critical
+  },
+  {
+    key: "website-intelligence-sync",
+    name: "Website intelligence evidence sync",
+    cronExpression: "*/30 * * * *",
+    handler: websiteIntelligenceSyncJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // opt-in, bounded batch (10 recent scans/org/run) — same tier as company-research-backlog, safe to retry whole-job since both underlying functions are idempotent
+  },
+  {
+    key: "decision-maker-sync",
+    name: "Decision-maker discovery sync",
+    cronExpression: "*/30 * * * *",
+    handler: decisionMakerSyncJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // opt-in, bounded batch (5 qualified companies/org/run) — same tier as company-research-backlog/website-intelligence-sync, safe to retry since discoverDecisionMakers is idempotent
+  },
+  {
+    key: "partner-discovery-sync",
+    name: "Weekly AI partner discovery",
+    cronExpression: "0 6 * * 1",
+    handler: partnerDiscoverySyncJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 5, // opt-in, real AI web-search spend per org, but a much lower-frequency need than lead/decision-maker discovery (a handful of good referral partners, not a continuously refreshed backlog) — weekly, same morning slot as growth-improvement-plan-refresh
   },
   {
     key: "client-health-snapshot",

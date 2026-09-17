@@ -7,6 +7,9 @@ import {
   Sparkles,
   Bot,
   Building2,
+  Radar,
+  Target,
+  ListOrdered,
   UserSearch,
   Handshake,
   Globe,
@@ -32,6 +35,7 @@ import {
   Wand2,
   Briefcase,
   LifeBuoy,
+  Share2,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -43,6 +47,9 @@ const LINKS = [
   { href: "/dashboard/ai-command-center", labelKey: "nav.aiCommandCenter", icon: Sparkles },
   { href: "/board", labelKey: "nav.board", icon: Bot },
   { href: "/dashboard/companies", labelKey: "nav.companies", icon: Building2 },
+  { href: "/dashboard/company-discovery", labelKey: "nav.companyDiscovery", icon: Radar },
+  { href: "/dashboard/opportunities", labelKey: "nav.opportunities", icon: Target },
+  { href: "/dashboard/priority-queue", labelKey: "nav.priorityQueue", icon: ListOrdered },
   { href: "/dashboard/clients", labelKey: "nav.clients", icon: HeartPulse },
   { href: "/dashboard/lead-finder", labelKey: "nav.leadFinder", icon: UserSearch },
   { href: "/dashboard/client-finder", labelKey: "nav.clientFinder", icon: Handshake },
@@ -67,6 +74,7 @@ const LINKS = [
   { href: "/dashboard/marketplace", labelKey: "nav.marketplace", icon: Store },
   { href: "/dashboard/agency", labelKey: "nav.agency", icon: Building },
   { href: "/dashboard/partner", labelKey: "nav.partner", icon: Percent },
+  { href: "/dashboard/referral-partners", labelKey: "nav.referralPartners", icon: Share2 },
   { href: "/profile", labelKey: "nav.settings", icon: Settings },
 ] satisfies Array<{ href: string; labelKey: TranslationKey; icon: typeof LayoutDashboard; exact?: boolean }>;
 

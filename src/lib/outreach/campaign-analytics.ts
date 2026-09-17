@@ -105,11 +105,44 @@ export interface OutreachDashboardStats {
   notInterested: number;
   pending: number;
   tasks: number;
+  // ===== Analytics section additions (Phase 5) — all real, org-wide counts,
+  // reusing getCampaignAnalytics's exact status/field references. =====
+  sent: number;
+  // SENT with no real, signature-verified Resend bounce webhook event
+  // recorded against it (EmailDraft.bouncedAt) — honestly limited to what
+  // this codebase can actually confirm, never estimated.
+  delivered: number;
+  opened: number;
+  clicked: number;
+  // A Contact whose Company has landed at least one Deal in the "Won" stage
+  // (dealStage.name === "Won", the same string-match convention as
+  // src/lib/analytics.ts, src/lib/pipeline/intelligence.ts,
+  // src/app/dashboard/crm/actions.ts). Joined via Contact.companyId ->
+  // Company.deals rather than Deal.contactId: addOpportunityToCrmCore
+  // (src/app/dashboard/opportunities/_lib/opportunity-actions.ts) — the real
+  // path that turns outreach-sourced opportunities into Deals — only ever
+  // sets Deal.companyId, never Deal.contactId, so a contactId join would
+  // silently undercount to ~0 for opportunity-originated deals.
+  converted: number;
 }
 
 /** Real counts for the Outreach Dashboard stats strip — mirrors getScanStats/getCompanyStats. */
 export async function getOutreachDashboardStats(organizationId: string): Promise<OutreachDashboardStats> {
-  const [campaigns, emailsPrepared, replies, meetings, interested, notInterested, pending, tasks] = await Promise.all([
+  const [
+    campaigns,
+    emailsPrepared,
+    replies,
+    meetings,
+    interested,
+    notInterested,
+    pending,
+    tasks,
+    sent,
+    delivered,
+    opened,
+    clicked,
+    converted,
+  ] = await Promise.all([
     prisma.campaign.count({ where: { organizationId } }),
     prisma.emailDraft.count({ where: { organizationId } }),
     prisma.reply.count({ where: { organizationId } }),
@@ -118,7 +151,18 @@ export async function getOutreachDashboardStats(organizationId: string): Promise
     prisma.contact.count({ where: { organizationId, status: "NOT_INTERESTED" } }),
     prisma.emailDraft.count({ where: { organizationId, status: { in: ["DRAFT", "PENDING_APPROVAL", "APPROVED", "QUEUED"] } } }),
     prisma.task.count({ where: { organizationId, contactId: { not: null }, status: { not: "COMPLETED" } } }),
+    prisma.emailDraft.count({ where: { organizationId, status: "SENT" } }),
+    prisma.emailDraft.count({ where: { organizationId, status: "SENT", bouncedAt: null } }),
+    prisma.emailDraft.count({ where: { organizationId, status: "SENT", openCount: { gt: 0 } } }),
+    prisma.emailDraft.count({ where: { organizationId, status: "SENT", clickCount: { gt: 0 } } }),
+    prisma.contact.count({
+      where: {
+        organizationId,
+        companyId: { not: null },
+        company: { deals: { some: { dealStage: { name: "Won" } } } },
+      },
+    }),
   ]);
 
-  return { campaigns, emailsPrepared, replies, meetings, interested, notInterested, pending, tasks };
+  return { campaigns, emailsPrepared, replies, meetings, interested, notInterested, pending, tasks, sent, delivered, opened, clicked, converted };
 }

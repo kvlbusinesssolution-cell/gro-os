@@ -10,22 +10,22 @@ datasource db {
 // ============================= Auth.js core =============================
 
 model User {
-  id            String    @id @default(cuid())
-  name          String?
-  firstName     String?
-  lastName      String?
-  email         String?   @unique
-  emailVerified DateTime?
+  id               String    @id @default(cuid())
+  name             String?
+  firstName        String?
+  lastName         String?
+  email            String?   @unique
+  emailVerified    DateTime?
   // Public-facing value — either an external URL (legacy: pasted directly,
   // or an OAuth provider's own avatar URL) or our own serving route
   // (/api/users/{id}/avatar) once avatarStorageKey is set below.
-  image         String?
+  image            String?
   // Real on-disk storage key for a self-hosted avatar upload (src/lib/
   // storage/avatars.ts) — null when the user has no uploaded photo (still
   // using an external `image` URL, or no photo at all). Mirrors
   // WhiteLabelSettings.logoStorageKey's exact pattern.
   avatarStorageKey String?
-  password      String?
+  password         String?
 
   phone    String?
   country  String?
@@ -438,6 +438,15 @@ model Organization {
   deals     Deal[]
   reminders Reminder[]
 
+  // Phase 8: Partner & Referral Client Acquisition Engine — external
+  // referral partners (freelancers/agencies/consultants) who refer real
+  // prospect Companies into THIS organization's own CRM pipeline. Distinct
+  // from the Phase 18 Partner model above (a platform-wide SaaS
+  // reseller/affiliate who refers new tenant Organizations and earns
+  // commission on their subscription revenue) — see ReferralPartner's own
+  // doc comment for the full distinction.
+  referralPartners ReferralPartner[]
+
   quotations        Quotation[]
   contracts         Contract[]
   invoices          Invoice[]
@@ -446,8 +455,8 @@ model Organization {
   documentVersions  DocumentVersion[]
   signatures        Signature[]
 
-  boardReviews   BoardReview[]
-  approvalPolicy OrganizationApprovalPolicy?
+  boardReviews           BoardReview[]
+  approvalPolicy         OrganizationApprovalPolicy?
   predictionCalibrations PredictionCalibration[]
 
   projectMembers         ProjectMember[]
@@ -698,15 +707,21 @@ model Deal {
   sourceLead   Lead?        @relation(fields: [sourceLeadId], references: [id], onDelete: SetNull)
   owner        User?        @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
-  proposals         Proposal[]
-  tasks             Task[]
-  documents         Document[]
-  reminders         Reminder[]
-  quotations        Quotation[]
-  contracts         Contract[]
-  invoices          Invoice[]
-  businessDocuments BusinessDocument[]
-  projects          Project[]
+  proposals          Proposal[]
+  tasks              Task[]
+  documents          Document[]
+  reminders          Reminder[]
+  quotations         Quotation[]
+  contracts          Contract[]
+  invoices           Invoice[]
+  businessDocuments  BusinessDocument[]
+  projects           Project[]
+  // Phase 8: Partner & Referral Client Acquisition Engine — commission(s)
+  // owed to a ReferralPartner when this Deal is Won. Normally at most one row
+  // (the Deal's own referred Company has at most one referralPartnerId), but
+  // left many-valued rather than a unique 1:1 for the same "never fail a
+  // write over an edge case" reasoning as Lead.convertedDeals.
+  partnerCommissions PartnerCommission[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -792,6 +807,8 @@ model AIAgentInstance {
   executiveReportsGenerated  ExecutiveReport[]
   emailDraftsGenerated       EmailDraft[]
   detectedProjectRisks       ProjectRisk[]
+  companyEvidenceGenerated   CompanyEvidence[]
+  decisionMakersGenerated    DecisionMaker[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1467,6 +1484,10 @@ enum CompanySource {
   // background-job-discovered company from every manually-triggered source
   // above, so activity/timeline history stays honest about how it got here.
   AUTO_DISCOVERY
+  // Phase 8: Partner & Referral Client Acquisition Engine — a Company
+  // created/attributed via an external ReferralPartner's referral, distinct
+  // from every source above. See Company.referralPartnerId.
+  REFERRAL
 }
 
 enum CompanyStatus {
@@ -1522,7 +1543,25 @@ model Company {
   ownerUserId         String?
   priority            MessagePriority @default(NORMAL)
 
+  // ===== Discovery-source tracking (Phase 1 AI Business Development System) =====
+  // `source` above stays the ORIGINAL discovery source only. These track every
+  // re-discovery of this same Company over time, e.g. found first by Lead
+  // Finder then re-surfaced by the autonomous discovery job.
+  sourceCount      Int      @default(1)
+  discoverySources String[] @default([])
+  lastDiscoveredAt DateTime @default(now())
+
+  // Phase 8: Partner & Referral Client Acquisition Engine — which
+  // ReferralPartner (if any) referred this Company. Null means "no known
+  // referral partner", never guessed. This is the real Partner -> Referral
+  // attribution mechanism: a Company with a non-null referralPartnerId is
+  // this partner's referred company, and every Lead/Deal that traces back to
+  // it (via Lead.companyId / Deal.companyId) is attributable to the same
+  // partner for the Partner Portal's stats and commission calculation.
+  referralPartnerId String?
+
   organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  referralPartner   ReferralPartner?       @relation(fields: [referralPartnerId], references: [id], onDelete: SetNull)
   owner             User?                  @relation("CompanyOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   leads             Lead[]
   clients           Client[]
@@ -1549,11 +1588,20 @@ model Company {
   // Autonomous AI Business Development System (Phase 17)
   leadOpportunities LeadOpportunity[]
   buyerPersonas     BuyerPersona[]
+  // Phase 1: raw observed facts + AI interpretations backing intelligence/
+  // opportunity output, each traceable to its originating source.
+  evidence          CompanyEvidence[]
+  // Phase 3: real, publicly-sourced named decision-makers at this company.
+  decisionMakers    DecisionMaker[]
+  // Phase 4: deterministic buying-intent score, computed from this
+  // company's own CompanyIntelligence signal lists + CompanyEvidence rows.
+  intentScore       IntentScore?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([organizationId])
+  @@index([referralPartnerId])
 }
 
 enum ClientStatus {
@@ -3233,6 +3281,135 @@ model Payout {
   createdAt DateTime @default(now())
 }
 
+// ============================= Phase 8: Partner & Referral Client Acquisition Engine =============================
+//
+// IMPORTANT — this is a DELIBERATELY SEPARATE bounded context from the
+// `Partner`/`Commission`/`Payout` models above (Phase 18's platform-wide
+// SaaS reseller/affiliate program). That existing system: one `Partner` row
+// per platform USER (`Partner.userId @unique`, no organizationId at all —
+// it is NOT scoped to a tenant), who refers brand-new tenant `Organization`
+// signups via a referral code/link, earning `commissionRatePercent` of that
+// referred organization's PLATFORM BILLING revenue
+// (see src/lib/partners/commissions.ts's generateCommissionForPayment).
+//
+// This phase's spec ("Partner Types: Freelancers, Digital agencies, SEO
+// agencies, Marketing/IT/Business/Technology consultants, Designers" +
+// "Referral flow: Partner -> Referral -> Lead -> Qualification ->
+// Opportunity -> Deal -> Revenue -> Commission") describes something else
+// entirely: a real-world business partner (an agency/freelancer/consultant)
+// who refers PROSPECT COMPANIES into ONE SPECIFIC ORGANIZATION's own CRM/
+// sales pipeline (Company -> Lead -> Deal, the exact same pipeline Phase
+// 1-7's business-development system already populates), earning commission
+// on that ORGANIZATION's OWN DEAL REVENUE — not platform subscription
+// billing. It is inherently per-organization (`organizationId` below),
+// which the existing Partner model structurally cannot be without breaking
+// its own semantics. Reusing/renaming the existing Partner model would
+// conflate two unrelated relationships (a SaaS affiliate vs. a client
+// referral source) under one row shape, which is worse than a second,
+// clearly-documented model. Hence: `ReferralPartner`, `PartnerCommission`
+// (also deliberately distinctly named from the existing `Commission` model).
+//
+// Attribution mechanism (the actual "Partner -> Referral -> Lead" link):
+// Company.referralPartnerId, set only manually via an explicit picker or by
+// the AI Partner Discovery job creating a CANDIDATE partner row — never
+// inferred/guessed. Every Lead/Deal under that Company is transitively this
+// partner's referral. "Qualification -> Opportunity" is the existing
+// Lead/LeadOpportunity pipeline on that same Company; "Deal -> Revenue" is
+// the existing Deal (dealStage.name === "Won", the same codebase-wide
+// convention used in src/lib/analytics.ts, kvl-sector-discovery-job.ts,
+// etc.); "Commission" is the new PartnerCommission row generated when that
+// Deal is won (see src/lib/business-development/partner-commission.ts).
+
+enum PartnerType {
+  FREELANCER
+  DIGITAL_AGENCY
+  SEO_AGENCY
+  MARKETING_CONSULTANT
+  IT_CONSULTANT
+  BUSINESS_CONSULTANT
+  DESIGNER
+  TECHNOLOGY_CONSULTANT
+}
+
+enum ReferralPartnerStatus {
+  // A real, evidence-backed prospective partner identified by the AI Partner
+  // Discovery job (src/lib/business-development/partner-discovery.ts) —
+  // "prospective/not yet recruited", the closest real equivalent to the
+  // existing Partner model's PENDING state, deliberately renamed since no
+  // application/signup happened here (a human recruits a CANDIDATE
+  // manually; nothing here auto-recruits or messages them — see the
+  // discovery job's own doc comment).
+  CANDIDATE
+  // A human operator has actually recruited/onboarded this partner — the
+  // relationship is live and referrals/commissions are tracked normally.
+  ACTIVE
+  // Recruited previously but the relationship is no longer active; referral
+  // history and past commissions are preserved, nothing new accrues.
+  INACTIVE
+}
+
+model ReferralPartner {
+  id                    String                @id @default(cuid())
+  organizationId        String
+  name                  String
+  type                  PartnerType?
+  status                ReferralPartnerStatus @default(CANDIDATE)
+  email                 String?
+  website               String?
+  notes                 String?               @db.Text
+  // Real number, a config/policy value the org sets (or the discovery job
+  // defaults) — never a fabricated fact about the partner, unlike
+  // discoveryEvidence below which must always trace to real search results.
+  commissionRatePercent Float                 @default(10)
+
+  // AI Partner Discovery provenance — populated only for a CANDIDATE row the
+  // discovery job created; null for a manually-added partner. Mirrors
+  // DecisionMaker.source/sourceUrl's non-fabrication discipline: real
+  // evidence (a company/agency website, a public profile, a directory
+  // listing) or nothing at all.
+  discoverySource String?
+  discoveryUrl    String?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization      Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  referredCompanies Company[]
+  commissions       PartnerCommission[]
+
+  @@index([organizationId])
+  @@index([organizationId, status])
+}
+
+enum PartnerCommissionStatus {
+  PENDING
+  PAID
+}
+
+model PartnerCommission {
+  id        String                  @id @default(cuid())
+  partnerId String
+  dealId    String
+  // Real number computed as Deal.value * partner.commissionRatePercent at
+  // the moment the Deal was won — never invented, never recomputed later
+  // even if the partner's rate subsequently changes (this row is the
+  // historical record of what was actually owed for that specific deal).
+  amount    Float
+  status    PartnerCommissionStatus @default(PENDING)
+
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+
+  partner ReferralPartner @relation(fields: [partnerId], references: [id], onDelete: Cascade)
+  deal    Deal            @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  // One commission per (partner, deal) — makes commission generation on
+  // deal-won idempotent (a re-fired DEAL_STAGE_CHANGED never double-pays).
+  @@unique([partnerId, dealId])
+  @@index([partnerId, status])
+}
+
 enum LicenseType {
   API
   SEAT
@@ -3740,6 +3917,41 @@ model LeadScore {
   @@index([companyId])
 }
 
+// Phase 4: "How strong is the evidence this company may need something NOW?"
+// — deliberately SEPARATE from LeadScore (relevance/fit, above) and from
+// LeadOpportunity.opportunityScore (below). Purely deterministic, computed
+// from this company's own already-AI-generated CompanyIntelligence signal
+// lists (growthSignals/hiringSignals/expansionIndicators) plus real
+// CompanyEvidence RAW_FACT problem facts — never a fresh AI call, and never
+// fabricated: "no signal should be treated as intent without evidence" (see
+// src/lib/business-development/intent-scoring.ts). Latest score only (not
+// history) — re-scoring upserts this row, same discipline as LeadScore.
+enum IntentBand {
+  HIGH
+  MEDIUM
+  LOW
+  NONE
+}
+
+model IntentScore {
+  id        String     @id @default(cuid())
+  companyId String     @unique
+  score     Int
+  band      IntentBand
+  // Structured breakdown: Array<{ signal, source, detail, points }> — the
+  // real "why" behind the score, never a black box. See IntentSignal in
+  // src/lib/business-development/intent-scoring.ts for the shape.
+  signals   Json
+  // One human-readable paragraph summarizing the actual signals that
+  // contributed — honest and specific, never generic boilerplate.
+  reasoning String     @db.Text
+  scoredAt  DateTime   @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
 // One row per AI Company Intelligence report generation — kept as a log
 // (not upserted) so past reports remain visible; the UI shows the latest.
 // Every field here is real Claude output, always rendered labeled
@@ -3799,6 +4011,86 @@ model ResearchNote {
   createdAt DateTime @default(now())
 
   @@index([companyId, createdAt])
+}
+
+enum EvidenceKind {
+  RAW_FACT
+  AI_INTERPRETATION
+}
+
+enum EvidenceSource {
+  WEBSITE_SCAN
+  WEB_SEARCH
+  MANUAL
+  CSV_IMPORT
+  COMPANY_INTELLIGENCE
+}
+
+// Phase 1 AI Business Development System — the evidentiary backbone behind
+// CompanyIntelligence/LeadOpportunity output. `kind` explicitly separates a
+// raw observed fact (e.g. "Mobile performance score: 42/100", straight off a
+// WebsiteScan) from an AI interpretation of that fact (e.g. "Potential mobile
+// conversion improvement opportunity"), so downstream UI never presents an
+// inference as an observed fact.
+model CompanyEvidence {
+  id                 String         @id @default(cuid())
+  companyId          String
+  kind               EvidenceKind
+  fact               String         @db.Text
+  source             EvidenceSource
+  sourceUrl          String?
+  confidence         Float
+  discoveredAt       DateTime       @default(now())
+  generatedByAgentId String?
+
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+
+  @@index([companyId])
+}
+
+// Phase 3: Decision Maker Intelligence — the most relevant PUBLICLY
+// AVAILABLE business contact(s) at a discovered/qualified Company (real named
+// individuals, never a guessed/invented identity). Distinct from
+// `BuyerPersona` (an AI-inferred probable-role archetype with no real name,
+// grounded only in CompanyIntelligence data): a DecisionMaker row is only
+// ever written when a real web-search-grounded AI pass found genuine
+// evidence (a company team/about page, a public professional profile, a
+// press mention) tying a real name to a role at this specific company.
+// `source` is a plain-language description of where it came from (e.g.
+// "Company website /about page"); `sourceUrl`, when known, is the actual
+// link. `confidence` is the AI's own honest self-assessment (0.0-1.0) of how
+// certain this real-name+role pairing is — never a fixed/fabricated number.
+enum DecisionMakerRole {
+  FOUNDER
+  CO_FOUNDER
+  CEO
+  DIRECTOR
+  CTO
+  COO
+  MARKETING_HEAD
+  SALES_HEAD
+  BUSINESS_DEVELOPMENT_HEAD
+  IT_HEAD
+  PRODUCT_HEAD
+}
+
+model DecisionMaker {
+  id                 String            @id @default(cuid())
+  companyId          String
+  name               String
+  role               DecisionMakerRole
+  source             String
+  sourceUrl          String?
+  confidence         Float
+  verifiedAt         DateTime          @default(now())
+  generatedByAgentId String?
+  createdAt          DateTime          @default(now())
+
+  company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+
+  @@index([companyId])
 }
 
 enum CompanyTimelineEventType {
@@ -3960,6 +4252,10 @@ enum TechnologyCategory {
   HOSTING
   CDN
   ANALYTICS
+  PAYMENT
+  BOOKING
+  CRM_INDICATOR
+  MESSAGING
   OTHER
 }
 
@@ -4077,10 +4373,10 @@ model DomainInfo {
 }
 
 model SEOAudit {
-  id                     String  @id @default(cuid())
-  scanId                 String  @unique
+  id                     String    @id @default(cuid())
+  scanId                 String    @unique
   metaTitle              String?
-  metaDescription        String? @db.Text
+  metaDescription        String?   @db.Text
   hasCanonical           Boolean
   hasOpenGraph           Boolean
   hasTwitterCard         Boolean
@@ -4119,64 +4415,64 @@ model SEOAudit {
 // which would require a real rendered browser (not available here). Every UI
 // surface of this data must carry that disclaimer.
 model PerformanceAudit {
-  id               String  @id @default(cuid())
-  scanId           String  @unique
-  responseTimeMs   Int
-  htmlSizeBytes    Int
-  scriptTagCount   Int
-  stylesheetCount  Int
-  imageTagCount    Int
-  hasCaching       Boolean
-  hasCompression   Boolean
+  id                        String  @id @default(cuid())
+  scanId                    String  @unique
+  responseTimeMs            Int
+  htmlSizeBytes             Int
+  scriptTagCount            Int
+  stylesheetCount           Int
+  imageTagCount             Int
+  hasCaching                Boolean
+  hasCompression            Boolean
   // Real DOM fact: <script> tags in <head> without async/defer, which block
   // initial render.
-  renderBlockingScriptCount Int @default(0)
+  renderBlockingScriptCount Int     @default(0)
   // Real inspection of <img> src extensions (webp/avif vs legacy formats).
-  modernImageFormatPct      Int @default(100)
+  modernImageFormatPct      Int     @default(100)
   // Real inspection of <img loading="lazy"> attribute usage.
-  lazyLoadedImagePct        Int @default(100)
+  lazyLoadedImagePct        Int     @default(100)
   // Real Core Web Vitals from an actual headless-Chromium render (Playwright,
   // src/lib/scanner/browser-metrics.ts) — only populated when
   // ENABLE_BROWSER_SCAN=true AND the render genuinely succeeded. Null means
   // "not measured this way", never a guessed/interpolated value; the
   // static-signal fields above remain the fallback the score is based on.
-  largestContentfulPaintMs Int?
-  cumulativeLayoutShift    Float?
-  totalBlockingTimeMs      Int?
-  measuredByRealBrowser    Boolean @default(false)
-  performanceScore Int
-  findings         Json
+  largestContentfulPaintMs  Int?
+  cumulativeLayoutShift     Float?
+  totalBlockingTimeMs       Int?
+  measuredByRealBrowser     Boolean @default(false)
+  performanceScore          Int
+  findings                  Json
 
   scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
 }
 
 model UXAudit {
-  id                  String  @id @default(cuid())
-  scanId              String  @unique
-  hasNav              Boolean
-  formCount           Int
-  ctaCount            Int
-  altTextCoveragePct  Int
+  id                            String  @id @default(cuid())
+  scanId                        String  @unique
+  hasNav                        Boolean
+  formCount                     Int
+  ctaCount                      Int
+  altTextCoveragePct            Int
   // Real Flesch-Kincaid readability score computed on extracted visible text.
-  readabilityScore    Float
-  viewportMetaPresent Boolean
+  readabilityScore              Float
+  viewportMetaPresent           Boolean
   // Human-readable summary of the contrast check outcome — either the real
   // declared color/background pair found in the site's own CSS, or an
   // honest "no usable pair found" note.
-  colorContrastNote   String
+  colorContrastNote             String
   // Real WCAG relative-luminance contrast ratio computed from a
   // color/background pair actually declared in inline <style> or the first
   // same-origin external stylesheet. Null when no usable pair was found —
   // heuristic on real declared CSS, not a rendered/computed-style check.
-  contrastRatio       Float?
+  contrastRatio                 Float?
   // True when contrastRatio/colorContrastNote came from a real rendered
   // computed-style check (Playwright, src/lib/scanner/browser-metrics.ts)
   // instead of the declared-CSS heuristic in contrast.ts — a genuinely
   // stronger check (resolves cascade/specificity/CSS variables), only
   // available when ENABLE_BROWSER_SCAN=true and the render succeeded.
   contrastMeasuredByRealBrowser Boolean @default(false)
-  uxScore             Int
-  findings            Json
+  uxScore                       Int
+  findings                      Json
 
   scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
 }
@@ -4185,42 +4481,42 @@ model UXAudit {
 // TLS-handshake/known-sensitive-paths only) — never a penetration test.
 // Always disclaimed as such in the UI.
 model SecurityAudit {
-  id                     String   @id @default(cuid())
-  scanId                 String   @unique
-  isHttps                Boolean
-  hasHsts                Boolean
-  hasCsp                 Boolean
-  hasXFrameOptions       Boolean
-  hasXContentTypeOptions Boolean
-  hasReferrerPolicy      Boolean  @default(false)
-  hasPermissionsPolicy   Boolean  @default(false)
-  cookiesSecureFlag      Boolean?
-  cookiesHttpOnlyFlag    Boolean?
-  mixedContentCount      Int
+  id                        String   @id @default(cuid())
+  scanId                    String   @unique
+  isHttps                   Boolean
+  hasHsts                   Boolean
+  hasCsp                    Boolean
+  hasXFrameOptions          Boolean
+  hasXContentTypeOptions    Boolean
+  hasReferrerPolicy         Boolean  @default(false)
+  hasPermissionsPolicy      Boolean  @default(false)
+  cookiesSecureFlag         Boolean?
+  cookiesHttpOnlyFlag       Boolean?
+  mixedContentCount         Int
   // Real check: Access-Control-Allow-Origin: * combined with
   // Access-Control-Allow-Credentials: true on the main response.
-  corsMisconfigured         Boolean @default(false)
+  corsMisconfigured         Boolean  @default(false)
   // Real bounded fetch of a handful of well-known sensitive paths
   // (/.env, /.git/config) — genuine misconfiguration detection.
-  exposedSensitiveFileCount Int     @default(0)
+  exposedSensitiveFileCount Int      @default(0)
   // Real TLS handshake (node:tls) against the live host — Node's own
   // certificate-chain/hostname validation, not a third-party API.
-  tlsAuthorized          Boolean?
-  tlsProtocol            String?
-  tlsDaysUntilExpiry     Int?
+  tlsAuthorized             Boolean?
+  tlsProtocol               String?
+  tlsDaysUntilExpiry        Int?
   // Real parse of the Strict-Transport-Security header's max-age directive —
   // null when HSTS isn't set at all (distinct from hasHsts=true, weak).
-  hstsMaxAgeSeconds      Int?
+  hstsMaxAgeSeconds         Int?
   // Real substring check on the Content-Security-Policy header value itself.
-  cspHasUnsafeDirectives Boolean?
+  cspHasUnsafeDirectives    Boolean?
   // Real Set-Cookie attribute parse — null when no cookies were observed
   // (same "no data" semantics as cookiesSecureFlag/cookiesHttpOnlyFlag).
-  cookiesSameSiteFlag    Boolean?
+  cookiesSameSiteFlag       Boolean?
   // Real count of <script src> tags pointing cross-origin without an
   // integrity="..." attribute — a genuine supply-chain risk signal.
-  missingSriScriptCount  Int      @default(0)
-  securityScore          Int
-  findings               Json
+  missingSriScriptCount     Int      @default(0)
+  securityScore             Int
+  findings                  Json
 
   scan WebsiteScan @relation(fields: [scanId], references: [id], onDelete: Cascade)
 }
@@ -4283,7 +4579,7 @@ model ExecutiveReport {
   // model strictly from real scraped page text/metadata, never a template
   // guess. Distinct from technologyOverview, which is about the stack, not
   // the business itself.
-  businessPurposeSummary     String   @db.Text @default("")
+  businessPurposeSummary     String   @default("") @db.Text
   technologyOverview         String   @db.Text
   seoFindingsSummary         String   @db.Text
   performanceFindingsSummary String   @db.Text
@@ -4425,6 +4721,23 @@ enum ReplySentiment {
   POSITIVE
   NEUTRAL
   NEGATIVE
+}
+
+// Phase 6: AI Reply Intelligence — what the sender actually wants next.
+// Deliberately kept separate from ReplySentiment (tone) — a reply can be
+// e.g. NEUTRAL in tone but a clear REQUEST_CALL in intent.
+enum ReplyIntent {
+  INTERESTED
+  NOT_INTERESTED
+  NEEDS_INFORMATION
+  REQUEST_CALL
+  REQUEST_PROPOSAL
+  FOLLOW_UP_LATER
+  PRICE_QUESTION
+  WRONG_CONTACT
+  OUT_OF_OFFICE
+  UNSUBSCRIBE
+  UNKNOWN
 }
 
 // The person-level entity Company/Lead/Client don't have today. Lead Score /
@@ -4625,20 +4938,29 @@ model Approval {
   @@index([emailDraftId])
 }
 
-// Every row is a real person's manual entry of what a prospect actually
-// wrote back — never AI-fabricated. sentiment is real AI classification run
-// over that real content, always labeled AI-inferred in the UI.
+// Every row is real content a prospect actually wrote back — either a human's
+// own manual entry, or (KVL's own org only, see kvl-reply-sync-job.ts) the
+// real body of a real received email, auto-captured via IMAP — never
+// AI-fabricated either way. sentiment is real AI classification run over
+// that real content, always labeled AI-inferred in the UI.
 model Reply {
-  id             String          @id @default(cuid())
-  organizationId String
-  contactId      String
-  campaignId     String?
-  emailDraftId   String?
-  channel        DraftChannel
-  content        String          @db.Text
-  sentiment      ReplySentiment?
-  loggedByUserId String
-  receivedAt     DateTime        @default(now())
+  id                String          @id @default(cuid())
+  organizationId    String
+  contactId         String
+  campaignId        String?
+  emailDraftId      String?
+  channel           DraftChannel
+  content           String          @db.Text
+  sentiment         ReplySentiment?
+  // Phase 6: AI Reply Intelligence — granular "what does the sender want
+  // next" classification, distinct from sentiment (tone). All three are
+  // populated by the same single AI call as sentiment, or left null
+  // together when AI isn't connected — never independently fabricated.
+  intent            ReplyIntent?
+  intentConfidence  Float?
+  suggestedResponse String?         @db.Text
+  loggedByUserId    String
+  receivedAt        DateTime        @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -6282,23 +6604,23 @@ enum SalesInquiryStatus {
 // inquiry into a real Lead is a manual admin action once/if that visitor's
 // company actually signs up — see src/app/admin/sales-inquiries.
 model SalesInquiry {
-  id             String                 @id @default(cuid())
-  name           String
-  company        String
-  businessEmail  String
-  phone          String?
-  country        String?
-  department     SalesInquiryDepartment
-  industry       String?
-  employeeCount  String?
-  budget         String?
-  timeline       String?
-  projectType    String?
-  message        String                 @db.Text
-  sourcePage     String?
-  referrer       String?
-  status         SalesInquiryStatus     @default(NEW)
-  consentGiven   Boolean                @default(false)
+  id            String                 @id @default(cuid())
+  name          String
+  company       String
+  businessEmail String
+  phone         String?
+  country       String?
+  department    SalesInquiryDepartment
+  industry      String?
+  employeeCount String?
+  budget        String?
+  timeline      String?
+  projectType   String?
+  message       String                 @db.Text
+  sourcePage    String?
+  referrer      String?
+  status        SalesInquiryStatus     @default(NEW)
+  consentGiven  Boolean                @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -6620,9 +6942,62 @@ model LeadOpportunity {
   generatedByAgentId String?
   createdAt          DateTime @default(now())
 
+  // Phase 2: KVL service catalog matching. `recommendedService` stores a
+  // KVLServiceId string (e.g. "WEBSITE_DEVELOPMENT") — plain String, not a
+  // Prisma enum, since the catalog lives in application code
+  // (kvl-service-catalog.ts) per the spec's "do not hardcode service logic
+  // inside UI/schema" intent; application-level validation (Zod, matched
+  // against KVL_SERVICES) is more appropriate than a rigid DB enum that
+  // would need a migration every time a service is added/renamed.
+  recommendedService String?
+  serviceMatchScore  Int?
+  serviceMatchReason String?           @db.Text
+  status             OpportunityStatus @default(NEW)
+  updatedAt          DateTime          @updatedAt
+
+  // Phase 2: AI Opportunity Brief — the two genuinely new fields the brief
+  // needs beyond what's already stored above (Company Overview/Business
+  // Context are composed at read time from Company + CompanyIntelligence,
+  // see opportunity-brief.ts). Both are grounded in the same evidence
+  // already required for the opportunity itself — never generic boilerplate.
+  salesAngle String? @db.Text
+  nextStep   String? @db.Text
+
+  // Phase 4: "How relevant and actionable is this detected opportunity?" —
+  // a weighted blend of problem severity, service match, evidence quality,
+  // buying intent (IntentScore, reused not recomputed) and business
+  // relevance (LeadScore.overallScore, reused not recomputed). See
+  // src/lib/business-development/opportunity-priority.ts for the formula.
+  // `opportunityScoreBreakdown` is the same transparent-breakdown discipline
+  // as IntentScore.signals: { problemSeverity, serviceMatch, evidenceQuality,
+  // intent, businessRelevance, total }. `priority` is the configurable
+  // HOT/HIGH/MEDIUM/NURTURE/LOW/DISQUALIFIED bucket derived from the total,
+  // with DISMISSED opportunities always forced to DISQUALIFIED regardless
+  // of score. Nullable — pre-Phase-4 rows haven't been scored yet.
+  opportunityScore          Int?
+  opportunityScoreBreakdown Json?
+  priority                  OpportunityPriority?
+  priorityReasoning         String?              @db.Text
+
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId, createdAt])
+}
+
+enum OpportunityStatus {
+  NEW
+  REVIEWED
+  ADDED_TO_CRM
+  DISMISSED
+}
+
+enum OpportunityPriority {
+  HOT
+  HIGH
+  MEDIUM
+  NURTURE
+  LOW
+  DISQUALIFIED
 }
 
 model BuyerPersona {
@@ -6685,6 +7060,16 @@ model ExecutiveBriefing {
   revenueForecast       Json
   risks                 String[]
   recommendedActions    String[]
+  // Phase 10 (Autonomous Growth Operating System): real, deterministic Phase
+  // 1-9 grounding data pulled in alongside the pre-existing fields above —
+  // new/HOT LeadOpportunity counts, Reply counts by intent, at-risk (no
+  // recent activity) Deal count, pending Proposal count/aging,
+  // ReferralPartner candidate count, and a computeAcquisitionOverview()
+  // snapshot. Nullable so every pre-Phase-10 briefing row stays valid
+  // without a backfill. See GrowthSignals in src/lib/ai/executive-briefing.ts
+  // for the exact shape — same "denormalize the real numbers at generation
+  // time" reasoning as every other field on this model.
+  growthSignals         Json?
   // The ONLY AI-generated field on this model — a CEO-voice paragraph that
   // reformats/prioritizes the deterministic fields above. Every other field
   // is a plain Prisma aggregate computed before this is generated.

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { generateStructured } from "@/lib/ai/fallback";
 import { recordAIUsage } from "@/lib/billing/ai-credits";
 import { runDigitalAudit, summarizeWebsiteScan } from "@/lib/company-discovery/digital-audit";
+import { KVL_SERVICES, type KVLServiceId } from "@/lib/business-development/kvl-service-catalog";
 
 /**
  * Opportunity Engine (spec) — structured, categorized opportunities per
@@ -18,6 +19,11 @@ import { runDigitalAudit, summarizeWebsiteScan } from "@/lib/company-discovery/d
  * are never invented from nothing.
  */
 
+// Built from the real catalog (kvl-service-catalog.ts) so an
+// invalid/hallucinated service id fails Zod validation rather than being
+// silently accepted.
+const KVL_SERVICE_IDS = KVL_SERVICES.map((s) => s.id) as [KVLServiceId, ...KVLServiceId[]];
+
 const LeadOpportunitySchema = z.object({
   category: z.string(),
   title: z.string(),
@@ -26,6 +32,15 @@ const LeadOpportunitySchema = z.object({
   estimatedValue: z.number().nonnegative().nullable(),
   evidence: z.string(),
   confidenceScore: z.number().min(0).max(100),
+  // KVL service catalog matching — grounded in the same evidence already
+  // required above for the opportunity itself.
+  recommendedService: z.enum(KVL_SERVICE_IDS),
+  serviceMatchScore: z.number().min(0).max(100),
+  serviceMatchReason: z.string(),
+  // AI Opportunity Brief — the sales-facing hook and concrete next action,
+  // both grounded in the same evidence as the opportunity itself.
+  salesAngle: z.string(),
+  nextStep: z.string(),
 });
 
 const LeadOpportunitiesSchema = z.object({
@@ -71,6 +86,24 @@ export async function generateLeadOpportunities(companyId: string): Promise<numb
       "DevOps, Performance Improvements, SEO Improvements, Digital Transformation) — but ONLY where genuinely",
       "supported by the real research/audit data given below. Every opportunity needs a real evidence citation",
       "from that data. Never invent a generic opportunity with no basis in what was actually found.",
+      "",
+      "For every opportunity you also must recommend exactly one service from KVL's real service catalog below",
+      "— set recommendedService to that service's id verbatim. Pick the single best-fitting service (use the",
+      "descriptions to disambiguate overlapping services, e.g. CRM vs BUSINESS_AUTOMATION vs AI_AUTOMATION).",
+      "Give serviceMatchScore (0-100, how strong the fit is) and serviceMatchReason (a short explanation grounded",
+      "in the same evidence as the opportunity itself — why this specific service, not another catalog entry).",
+      "",
+      "KVL service catalog:",
+      KVL_SERVICES.map((s) => `- ${s.id} (${s.label}): ${s.description}`).join("\n"),
+      "",
+      "For every opportunity you also must give salesAngle and nextStep, both grounded in the SAME evidence you",
+      "cited for the opportunity — never generic boilerplate like 'reach out and introduce our services'.",
+      "salesAngle is a short, concrete conversation opener/hook a salesperson could actually use, referencing the",
+      "specific detected problem (e.g. \"Their checkout has no visible payment-security badges — lead with the",
+      "trust/conversion angle, not price.\"). nextStep is a short, concrete recommended action grounded in the same",
+      "evidence (e.g. \"Offer a free 15-minute site audit call\" or \"Send the portfolio PDF referencing 2 similar",
+      "e-commerce clients\"). If you cannot ground either in real evidence, do not invent a generic one — make it",
+      "as specific as the underlying evidence allows.",
     ].join(" "),
     userContent: JSON.stringify({
       businessSummary: intelligence.businessSummary,
@@ -109,6 +142,11 @@ export async function generateLeadOpportunities(companyId: string): Promise<numb
       estimatedValue: o.estimatedValue,
       evidence: o.evidence,
       confidenceScore: o.confidenceScore,
+      recommendedService: o.recommendedService,
+      serviceMatchScore: o.serviceMatchScore,
+      serviceMatchReason: o.serviceMatchReason,
+      salesAngle: o.salesAngle,
+      nextStep: o.nextStep,
       generatedByAgentId: intelligence.generatedByAgentId,
     })),
   });

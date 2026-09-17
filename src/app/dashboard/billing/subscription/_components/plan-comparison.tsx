@@ -1,28 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useTransition } from "react";
 import { Check, Sparkles } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "@/components/ui/toast";
-import { ConfirmActionDialog } from "./confirm-action-dialog";
-import { ManualPaymentDialog } from "./manual-payment-dialog";
-import { startCheckoutAction, changePlanAction } from "../actions";
-import type { PaymentGatewayProvider, PlanTier, BillingIntervalUnit } from "@/generated/prisma/client";
+import { changePlanAction } from "../actions";
 
 export interface PlanRowData {
   id: string;
-  tier: PlanTier;
   name: string;
   description: string | null;
-  interval: BillingIntervalUnit;
   priceCents: number;
   currency: string;
-  trialDays: number;
-  isCustom: boolean;
   userLimit: number | null;
   workspaceLimit: number | null;
   aiCreditsMonthly: number | null;
@@ -35,40 +27,10 @@ export interface PlanRowData {
   advancedAnalytics: boolean;
 }
 
-export interface ConfiguredGatewayInfo {
-  provider: PaymentGatewayProvider;
-  name: string;
-}
-
 export interface PlanComparisonProps {
   plans: PlanRowData[];
   currentPlanId: string | null;
-  /** True once the org has a real gateway-driven subscription (as opposed to never having subscribed, or being on the legacy free self-service plan). */
-  hasActiveSubscription: boolean;
-  configuredGateways: ConfiguredGatewayInfo[];
   canManage: boolean;
-}
-
-const TIER_ORDER: Record<PlanTier, number> = {
-  FREE: 0,
-  STARTER: 1,
-  PROFESSIONAL: 2,
-  BUSINESS: 3,
-  ENTERPRISE: 4,
-  CUSTOM: 5,
-};
-
-const TIER_LABEL: Record<PlanTier, string> = {
-  FREE: "Free",
-  STARTER: "Starter",
-  PROFESSIONAL: "Professional",
-  BUSINESS: "Business",
-  ENTERPRISE: "Enterprise",
-  CUSTOM: "Custom",
-};
-
-function formatPrice(cents: number, currency: string): string {
-  return (cents / 100).toLocaleString(undefined, { style: "currency", currency, maximumFractionDigits: 0 });
 }
 
 function formatLimit(value: number | null, unit = ""): string {
@@ -76,73 +38,21 @@ function formatLimit(value: number | null, unit = ""): string {
 }
 
 /**
- * Purely informational "≈ live rate" aside next to a non-USD plan price —
- * fetches a real rate from GET /api/billing/exchange-rate (backed by
- * src/lib/billing/exchange-rates.ts's Frankfurter/ECB integration) and
- * renders nothing at all if that returns null (unsupported currency, API
- * down, no network) rather than a stale or fabricated figure. USD is used
- * as a widely-understood reference currency; this never changes — and is
- * never read by — the actual charge amount above it.
+ * KVL Business Solutions runs a single free plan (see plan-catalog.ts) — no
+ * tiers to compare, no checkout, no gateway. This just confirms Full Access
+ * and, if the org hasn't been switched onto it yet, activates it in one
+ * click via changePlanAction (which sets currentPlanId directly with no
+ * payment involved whenever there's no live gateway subscription).
  */
-function LiveRateHint({ amountCents, currency }: { amountCents: number; currency: string }) {
-  const [usdAmount, setUsdAmount] = useState<number | null>(null);
+export function PlanComparison({ plans, currentPlanId, canManage }: PlanComparisonProps) {
+  const plan = plans[0];
 
-  useEffect(() => {
-    if (currency === "USD" || amountCents <= 0) return;
-
-    let cancelled = false;
-    fetch(`/api/billing/exchange-rate?from=${encodeURIComponent(currency)}&to=USD`)
-      .then((res) => (res.ok ? (res.json() as Promise<{ rate: number | null }>) : null))
-      .then((data) => {
-        if (cancelled || !data?.rate) return;
-        setUsdAmount((amountCents / 100) * data.rate);
-      })
-      .catch(() => {
-        // Best-effort informational aside — a failed fetch just means the
-        // hint doesn't render, never a thrown error or a guessed number.
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [amountCents, currency]);
-
-  if (usdAmount === null) return null;
-
-  return (
-    <p className="text-xs text-muted-foreground">
-      &asymp; {usdAmount.toLocaleString(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 })} USD{" "}
-      <span className="italic">(indicative live rate, not your charge amount)</span>
-    </p>
-  );
-}
-
-export function PlanComparison({ plans, currentPlanId, hasActiveSubscription, configuredGateways, canManage }: PlanComparisonProps) {
-  const availableIntervals = useMemo(() => {
-    const set = new Set(plans.map((p) => p.interval));
-    // Prefer MONTHLY/YEARLY as the toggle; fall back to whatever the seed
-    // actually populated if neither is present (e.g. only QUARTERLY seeded).
-    const preferred: BillingIntervalUnit[] = ["MONTHLY", "YEARLY"].filter((i) => set.has(i as BillingIntervalUnit)) as BillingIntervalUnit[];
-    return preferred.length > 0 ? preferred : Array.from(set);
-  }, [plans]);
-
-  const [interval, setInterval] = useState<BillingIntervalUnit>(availableIntervals[0] ?? "MONTHLY");
-
-  const visiblePlans = useMemo(
-    () => plans.filter((p) => p.interval === interval).sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier]),
-    [plans, interval],
-  );
-
-  const currentPlan = plans.find((p) => p.id === currentPlanId) ?? null;
-  const nonManualGateways = configuredGateways.filter((g) => g.provider !== "BANK_TRANSFER" && g.provider !== "MANUAL");
-  const manualGateway = configuredGateways.find((g) => g.provider === "BANK_TRANSFER" || g.provider === "MANUAL");
-
-  if (plans.length === 0) {
+  if (!plan) {
     return (
       <Card glass>
         <CardHeader>
-          <CardTitle className="text-base">Plans</CardTitle>
-          <CardDescription>No plan catalog rows found yet — the platform plan seed hasn&rsquo;t run in this environment.</CardDescription>
+          <CardTitle className="text-base">Plan</CardTitle>
+          <CardDescription>No plan catalog row found yet — the platform plan seed hasn&rsquo;t run in this environment.</CardDescription>
         </CardHeader>
       </Card>
     );
@@ -150,102 +60,43 @@ export function PlanComparison({ plans, currentPlanId, hasActiveSubscription, co
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-foreground">Plans</h2>
-          <p className="text-sm text-muted-foreground">Real, database-driven plan catalog — pricing and limits are live rows, not hardcoded.</p>
-        </div>
-        {availableIntervals.length > 1 && (
-          <Tabs value={interval} onValueChange={(v) => setInterval(v as BillingIntervalUnit)}>
-            <TabsList>
-              {availableIntervals.map((i) => (
-                <TabsTrigger key={i} value={i} hasPanel={false}>
-                  {i === "MONTHLY" ? "Monthly" : i === "YEARLY" ? "Yearly" : i}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </Tabs>
-        )}
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">Plan</h2>
+        <p className="text-sm text-muted-foreground">KVL Business Solutions has no subscriptions or paid tiers — this is the only plan, and it&rsquo;s free.</p>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {visiblePlans.map((plan) => (
-          <PlanCard
-            key={plan.id}
-            plan={plan}
-            isCurrent={plan.id === currentPlanId}
-            currentPlan={currentPlan}
-            hasActiveSubscription={hasActiveSubscription}
-            nonManualGateways={nonManualGateways}
-            manualGateway={manualGateway}
-            canManage={canManage}
-          />
-        ))}
+      <div className="mx-auto w-full max-w-md">
+        <PlanCard plan={plan} isCurrent={plan.id === currentPlanId} canManage={canManage} />
       </div>
     </div>
   );
 }
 
-function PlanCard({
-  plan,
-  isCurrent,
-  currentPlan,
-  hasActiveSubscription,
-  nonManualGateways,
-  manualGateway,
-  canManage,
-}: {
-  plan: PlanRowData;
-  isCurrent: boolean;
-  currentPlan: PlanRowData | null;
-  hasActiveSubscription: boolean;
-  nonManualGateways: ConfiguredGatewayInfo[];
-  manualGateway: ConfiguredGatewayInfo | undefined;
-  canManage: boolean;
-}) {
+function PlanCard({ plan, isCurrent, canManage }: { plan: PlanRowData; isCurrent: boolean; canManage: boolean }) {
   const [pending, startTransition] = useTransition();
 
-  // Downgrade detection is a real-but-approximate proxy: lower tier ordering
-  // OR same tier at a lower monthly-equivalent price. Good enough to decide
-  // whether a change needs a confirmation dialog; not a source of truth for
-  // billing math itself.
-  const isDowngrade = currentPlan ? TIER_ORDER[plan.tier] < TIER_ORDER[currentPlan.tier] : false;
-
-  function handleCheckout(provider: PaymentGatewayProvider) {
+  function handleActivate() {
     startTransition(async () => {
-      const result = await startCheckoutAction(plan.id, provider);
-      if (!result.ok || !result.checkoutUrl) {
-        toast.error(result.error ?? "Could not start checkout.");
+      const result = await changePlanAction(plan.id);
+      if (!result.ok) {
+        toast.error(result.error ?? "Could not activate Full Access.");
         return;
       }
-      window.location.href = result.checkoutUrl;
+      toast.success("Full Access activated — free, no card needed.");
     });
   }
 
-  function handleChangePlan() {
-    return changePlanAction(plan.id);
-  }
-
   return (
-    <Card glass={isCurrent} className={isCurrent ? "border-primary/40" : undefined}>
+    <Card glass className="border-primary/40 shadow-elevated shadow-glow-primary">
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base">{plan.name}</CardTitle>
-          <Badge variant={isCurrent ? "accent" : "outline"}>{TIER_LABEL[plan.tier]}</Badge>
+          <Badge variant="accent">Free</Badge>
         </div>
-        <CardDescription>{plan.description ?? " "}</CardDescription>
+        <CardDescription>{plan.description ?? " "}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div>
-          <p className="text-3xl font-semibold tracking-tight text-foreground">
-            {plan.priceCents === 0 ? "Free" : formatPrice(plan.priceCents, plan.currency)}
-          </p>
-          {plan.priceCents > 0 && (
-            <p className="text-xs text-muted-foreground">per {plan.interval === "YEARLY" ? "year" : plan.interval === "QUARTERLY" ? "quarter" : "month"}</p>
-          )}
-          {plan.priceCents > 0 && <LiveRateHint amountCents={plan.priceCents} currency={plan.currency} />}
-          {plan.trialDays > 0 && <p className="mt-1 text-xs text-primary">{plan.trialDays}-day free trial</p>}
-        </div>
+        <p className="text-3xl font-semibold tracking-tight text-foreground">Free</p>
 
         <ul className="flex flex-col gap-1.5 text-sm text-muted-foreground">
           <li className="flex items-center gap-1.5">
@@ -288,43 +139,17 @@ function PlanCard({
           )}
         </ul>
 
-        <div className="mt-auto flex flex-col gap-2 pt-2">
+        <div className="mt-auto pt-2">
           {!canManage ? (
-            <p className="text-xs text-muted-foreground">Only owners and admins can change plans.</p>
+            <p className="text-xs text-muted-foreground">Only owners and admins can activate the plan.</p>
           ) : isCurrent ? (
             <Badge variant="accent" className="w-fit">
               Current plan
             </Badge>
-          ) : hasActiveSubscription ? (
-            <ConfirmActionDialog
-              trigger={
-                <Button type="button" size="sm" variant={isDowngrade ? "outline" : "default"} disabled={pending}>
-                  {isDowngrade ? "Downgrade to this plan" : "Switch to this plan"}
-                </Button>
-              }
-              title={isDowngrade ? `Downgrade to ${plan.name}?` : `Switch to ${plan.name}?`}
-              description={
-                isDowngrade
-                  ? `Downgrading takes effect immediately and may reduce your available seats, AI credits, or features to match ${plan.name}'s limits.`
-                  : `You'll be moved to ${plan.name} immediately. Your gateway subscription is updated in place — no new checkout is needed.`
-              }
-              confirmLabel={isDowngrade ? "Downgrade" : "Confirm switch"}
-              destructive={isDowngrade}
-              successMessage={`Switched to ${plan.name}.`}
-              onConfirm={handleChangePlan}
-            />
           ) : (
-            <>
-              {nonManualGateways.map((gateway) => (
-                <Button key={gateway.provider} type="button" size="sm" disabled={pending} onClick={() => handleCheckout(gateway.provider)}>
-                  {pending ? "Redirecting..." : `Subscribe via ${gateway.name}`}
-                </Button>
-              ))}
-              {manualGateway && <ManualPaymentDialog planId={plan.id} planName={plan.name} />}
-              {nonManualGateways.length === 0 && !manualGateway && (
-                <p className="text-xs text-muted-foreground">No payment gateway is configured yet.</p>
-              )}
-            </>
+            <Button type="button" size="sm" disabled={pending} onClick={handleActivate}>
+              {pending ? "Activating..." : "Activate — it's free"}
+            </Button>
           )}
         </div>
       </CardContent>

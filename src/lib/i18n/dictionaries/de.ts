@@ -5,6 +5,9 @@ export const de: Dictionary = {
   "nav.aiCommandCenter": "KI-Kommandozentrale",
   "nav.board": "KI-Vorstand",
   "nav.companies": "Unternehmen",
+  "nav.companyDiscovery": "Unternehmenserkennung",
+  "nav.opportunities": "KI-Chancen",
+  "nav.priorityQueue": "KI-Prioritätswarteschlange",
   "nav.clients": "Kunden",
   "nav.promptLibrary": "Prompt-Bibliothek",
   "nav.hr": "Personal",
@@ -29,6 +32,7 @@ export const de: Dictionary = {
   "nav.marketplace": "Marktplatz",
   "nav.agency": "Agentur-Portal",
   "nav.partner": "Partnerprogramm",
+  "nav.referralPartners": "Empfehlungspartner",
   "nav.settings": "Einstellungen",
 
   "topnav.search": "Alles durchsuchen…",

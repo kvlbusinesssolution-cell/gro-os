@@ -2,16 +2,22 @@ import { generateStructuredViaJsonMode } from "./json-mode";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredResponse, ProviderTextRequest, ProviderTextResponse } from "./types";
 
 /**
- * Second free-tier fallback (after Groq) — Google's Gemini API has its own
- * request/response shape (not OpenAI-compatible): auth via a `?key=` query
- * param rather than a Bearer header, `systemInstruction` + `contents` in
- * place of a `messages` array, and `usageMetadata` in place of `usage`.
- * Structured output goes through the same shared JSON-mode + repair pattern
- * as Groq/OpenRouter (see json-mode.ts) rather than Gemini's native
+ * Primary provider (see fallback.ts's PROVIDER_CHAIN) — Google's Gemini API
+ * has its own request/response shape (not OpenAI-compatible): auth via a
+ * `?key=` query param rather than a Bearer header, `systemInstruction` +
+ * `contents` in place of a `messages` array, and `usageMetadata` in place of
+ * `usage`. Structured output goes through the same shared JSON-mode + repair
+ * pattern as Groq/OpenRouter (see json-mode.ts) rather than Gemini's native
  * `responseSchema`, to keep one battle-tested validation path across every
  * fallback provider instead of three slightly-different schema dialects.
  */
-const MODEL = process.env.GEMINI_MODEL ?? "gemini-2.5-flash";
+// "gemini-2.5-flash" (the prior default) started 404ing for this key on
+// 2026-09-17 ("no longer available to new users") — confirmed live against
+// GET /v1beta/models, not guessed. "gemini-flash-latest" is Google's own
+// rolling alias for the current recommended flash model, chosen over
+// pinning a dated model id again so this doesn't silently go stale the same
+// way.
+const MODEL = process.env.GEMINI_MODEL ?? "gemini-flash-latest";
 const BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
 function apiKey(): string | undefined {

@@ -18,7 +18,17 @@ const STATUS_OPTIONS = [
   { value: "CHURNED", label: "Churned" },
 ] as const;
 
-export function CompanyForm() {
+export interface CompanyFormReferralPartnerOption {
+  id: string;
+  name: string;
+}
+
+export interface CompanyFormProps {
+  /** ACTIVE-only referral partners for this org — see companies/page.tsx's fetch. */
+  referralPartners?: CompanyFormReferralPartnerOption[];
+}
+
+export function CompanyForm({ referralPartners = [] }: CompanyFormProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, startTransition] = useTransition();
@@ -31,6 +41,7 @@ export function CompanyForm() {
   const [phone, setPhone] = useState("");
   const [employeeCount, setEmployeeCount] = useState("");
   const [status, setStatus] = useState<(typeof STATUS_OPTIONS)[number]["value"]>("PROSPECT");
+  const [referralPartnerId, setReferralPartnerId] = useState("");
 
   function reset() {
     setName("");
@@ -40,6 +51,7 @@ export function CompanyForm() {
     setPhone("");
     setEmployeeCount("");
     setStatus("PROSPECT");
+    setReferralPartnerId("");
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -54,6 +66,7 @@ export function CompanyForm() {
         phone,
         employeeCount: employeeCount ? Number(employeeCount) : undefined,
         status,
+        referralPartnerId: referralPartnerId || undefined,
       });
       if (!result.ok) {
         setError(result.error ?? "Something went wrong.");
@@ -108,7 +121,7 @@ export function CompanyForm() {
               onChange={(e) => setEmployeeCount(e.target.value)}
             />
           </FormField>
-          <FormField label="Status" htmlFor="company-status" required className="sm:col-span-2">
+          <FormField label="Status" htmlFor="company-status" required>
             <Select
               id="company-status"
               value={status}
@@ -117,6 +130,24 @@ export function CompanyForm() {
               {STATUS_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
                   {opt.label}
+                </option>
+              ))}
+            </Select>
+          </FormField>
+          <FormField
+            label="Referral partner"
+            htmlFor="company-referral-partner"
+            hint="Who referred this company in, if anyone — sets its source to Referral."
+          >
+            <Select
+              id="company-referral-partner"
+              value={referralPartnerId}
+              onChange={(e) => setReferralPartnerId(e.target.value)}
+            >
+              <option value="">None</option>
+              {referralPartners.map((partner) => (
+                <option key={partner.id} value={partner.id}>
+                  {partner.name}
                 </option>
               ))}
             </Select>

@@ -1,4 +1,3 @@
-import Link from "next/link";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -18,7 +17,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { prisma } from "@/lib/prisma";
 import { getAICreditAvailability } from "@/lib/billing/ai-credits";
-import { listConfiguredGateways } from "@/lib/billing/gateway/registry";
 import { SUPPORTED_PLAN_CURRENCIES } from "@/lib/billing/plan-catalog";
 import { requireActiveMembership } from "../../_lib/require-membership";
 import { PlanComparison } from "./_components/plan-comparison";
@@ -88,21 +86,27 @@ export default async function BillingSubscriptionPage({
   const orgCurrency = membership.organization.currency;
   const planCurrency = orgCurrency && (SUPPORTED_PLAN_CURRENCIES as readonly string[]).includes(orgCurrency) ? orgCurrency : "USD";
 
-  const [billingAccount, invoices, plans, aiCredits, configuredGateways] = await Promise.all([
-    prisma.billingAccount.upsert({
-      where: { organizationId },
-      create: { organizationId },
-      update: {},
-      include: { currentPlan: true, paymentMethods: true, billingAddress: true, taxProfile: true },
-    }),
+  // Fetched before the billingAccount upsert (not in the same Promise.all)
+  // so a brand-new org's create branch below can point currentPlanId at
+  // the one free plan immediately — no separate "activate" click needed —
+  // rather than racing getAICreditAvailability's read of a not-yet-created
+  // account.
+  const plans = await prisma.plan.findMany({ where: { status: "ACTIVE", currency: planCurrency }, orderBy: [{ tier: "asc" }, { interval: "asc" }] });
+
+  const billingAccount = await prisma.billingAccount.upsert({
+    where: { organizationId },
+    create: { organizationId, currentPlanId: plans[0]?.id },
+    update: {},
+    include: { currentPlan: true, paymentMethods: true, billingAddress: true, taxProfile: true },
+  });
+
+  const [invoices, aiCredits] = await Promise.all([
     prisma.platformInvoice.findMany({
       where: { organizationId },
       orderBy: { issuedAt: "desc" },
       take: 50,
     }),
-    prisma.plan.findMany({ where: { status: "ACTIVE", currency: planCurrency }, orderBy: [{ tier: "asc" }, { interval: "asc" }] }),
     getAICreditAvailability(organizationId),
-    Promise.resolve(listConfiguredGateways()),
   ]);
 
   const hasActiveSubscription = !!billingAccount.gatewaySubscriptionId && !!billingAccount.currentPlanId;
@@ -119,13 +123,9 @@ export default async function BillingSubscriptionPage({
     <main className="py-8">
       <Container className="flex flex-col gap-6">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Subscription & payment</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Plan & billing</h1>
           <p className="text-sm text-muted-foreground">
-            Real, gateway-connected billing — plan, payment methods, invoices, and subscription lifecycle. See{" "}
-            <Link href="/dashboard/billing" className="underline underline-offset-2">
-              the legacy billing page
-            </Link>{" "}
-            for the free self-service plan/seat switcher this supplements.
+            KVL Business Solutions runs no subscriptions — Full Access is free for every organization, no card required.
           </p>
         </div>
 
@@ -210,13 +210,7 @@ export default async function BillingSubscriptionPage({
           )}
         </Card>
 
-        <PlanComparison
-          plans={plans}
-          currentPlanId={billingAccount.currentPlanId}
-          hasActiveSubscription={hasActiveSubscription}
-          configuredGateways={configuredGateways.map((g) => ({ provider: g.provider, name: g.name }))}
-          canManage={canManage}
-        />
+        <PlanComparison plans={plans} currentPlanId={billingAccount.currentPlanId} canManage={canManage} />
 
         <Card glass>
           <CardHeader>

@@ -15,6 +15,7 @@ import { GenerateDraftPanel } from "./_components/generate-draft-panel";
 import { FollowUpPanel } from "./_components/follow-up-panel";
 import { LogReplyForm } from "./_components/log-reply-form";
 import { RequestMeetingForm } from "./_components/request-meeting-form";
+import { SuggestedReplyButton } from "./_components/suggested-reply-button";
 
 export default async function ContactDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -100,6 +101,17 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
                       </div>
                       <p className="text-sm text-muted-foreground">{reply.content}</p>
                       <p className="text-xs text-muted-foreground">{new Date(reply.receivedAt).toLocaleString()}</p>
+                      {reply.suggestedResponse && (
+                        <div className="mt-1 flex flex-col gap-1.5 rounded-lg border border-border bg-muted/30 p-2.5">
+                          <p className="flex items-center gap-1 text-xs font-medium text-foreground">
+                            <Sparkles className="size-3.5 text-primary" /> AI-suggested reply
+                          </p>
+                          <p className="whitespace-pre-wrap text-sm text-muted-foreground">{reply.suggestedResponse}</p>
+                          <div>
+                            <SuggestedReplyButton replyId={reply.id} />
+                          </div>
+                        </div>
+                      )}
                     </CardContent>
                   </Card>
                 ))}

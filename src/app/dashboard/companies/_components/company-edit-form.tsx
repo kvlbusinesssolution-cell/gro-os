@@ -55,6 +55,12 @@ export interface CompanyEditFormFields {
   fundingStage: string;
   fundingAmount: string;
   language: string;
+  referralPartnerId: string;
+}
+
+export interface CompanyEditFormReferralPartnerOption {
+  id: string;
+  name: string;
 }
 
 export interface CompanyEditFormProps {
@@ -62,6 +68,8 @@ export interface CompanyEditFormProps {
   organizationId: string;
   canDelete: boolean;
   initial: CompanyEditFormFields;
+  /** ACTIVE-only referral partners for this org — see companies/[id]/page.tsx's fetch. */
+  referralPartners?: CompanyEditFormReferralPartnerOption[];
 }
 
 function splitTags(value: string): string[] {
@@ -71,7 +79,13 @@ function splitTags(value: string): string[] {
     .filter(Boolean);
 }
 
-export function CompanyEditForm({ companyId, organizationId, canDelete, initial }: CompanyEditFormProps) {
+export function CompanyEditForm({
+  companyId,
+  organizationId,
+  canDelete,
+  initial,
+  referralPartners = [],
+}: CompanyEditFormProps) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [deleting, startDeleteTransition] = useTransition();
@@ -195,6 +209,24 @@ export function CompanyEditForm({ companyId, organizationId, canDelete, initial 
                 value={fields.employeeCount}
                 onChange={(e) => set("employeeCount", e.target.value)}
               />
+            </FormField>
+            <FormField
+              label="Referral partner"
+              htmlFor="edit-referral-partner"
+              hint="Who referred this company in, if anyone."
+            >
+              <Select
+                id="edit-referral-partner"
+                value={fields.referralPartnerId}
+                onChange={(e) => set("referralPartnerId", e.target.value)}
+              >
+                <option value="">None</option>
+                {referralPartners.map((partner) => (
+                  <option key={partner.id} value={partner.id}>
+                    {partner.name}
+                  </option>
+                ))}
+              </Select>
             </FormField>
           </div>
 

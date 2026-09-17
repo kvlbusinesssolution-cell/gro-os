@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Calendar, MessageSquare, ListChecks, CheckSquare, Activity as ActivityIcon, BarChart3, ShieldCheck, Globe2, Target, Gauge, Newspaper } from "lucide-react";
+import { LayoutDashboard, Calendar, MessageSquare, ListChecks, CheckSquare, Activity as ActivityIcon, BarChart3, ShieldCheck, Globe2, Target, Gauge, Newspaper, Sparkles } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const LINKS = [
   { href: "/board", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/board/today", label: "Today", icon: Sparkles },
   { href: "/board/brief", label: "Daily Brief", icon: Newspaper },
   { href: "/board/growth", label: "Growth", icon: Gauge },
   { href: "/board/meetings", label: "Meetings", icon: Calendar },

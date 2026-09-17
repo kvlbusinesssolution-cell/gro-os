@@ -3,21 +3,26 @@ import type { ZodType } from "zod";
 import { anthropicProvider } from "./providers/anthropic-provider";
 import { groqProvider } from "./providers/groq-provider";
 import { geminiProvider } from "./providers/gemini-provider";
+import { openaiProvider } from "./providers/openai-provider";
 import { openrouterProvider } from "./providers/openrouter-provider";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderTextRequest } from "./providers/types";
 import type { AIUsageProvider } from "@/generated/prisma/client";
 import { enqueueAIFallbackRetry } from "./fallback-queue";
 
 /**
- * The real provider cascade: paid Claude first (best quality, the model
- * every prompt in this codebase was actually tuned against), then two free
- * tiers in order of how well they've held up in practice (Groq's free tier
- * is fast and reliable; OpenRouter's free-model routing is the last resort
- * before giving up entirely). Gemini sits between them — a second real free
- * tier, not just a Groq retry, so a Groq-specific outage doesn't take the
- * whole chain down with it.
+ * The real provider cascade: paid Gemini first — the org is paying for real
+ * Gemini quota and wants it actually spent, not left idle behind Claude —
+ * then paid OpenAI second (added 2026-09-17, same "don't let a paid key sit
+ * idle" reasoning), then paid Claude third (still the model every prompt in
+ * this codebase was actually tuned against, so quality never regresses once
+ * Gemini and OpenAI are both unavailable), then two free tiers as a last
+ * resort (Groq's free tier is fast and reliable; OpenRouter's free-model
+ * routing is the final fallback before giving up entirely). Three
+ * independent paid providers ahead of the free tier means an outage or
+ * billing lapse on any one of them never actually interrupts marketing
+ * output — there's always real capacity left in the chain.
  */
-const PROVIDER_CHAIN: AIProviderAdapter[] = [anthropicProvider, groqProvider, geminiProvider, openrouterProvider];
+const PROVIDER_CHAIN: AIProviderAdapter[] = [geminiProvider, openaiProvider, anthropicProvider, groqProvider, openrouterProvider];
 
 /**
  * Soft, per-process circuit breaker. When a provider fails, skip it for the

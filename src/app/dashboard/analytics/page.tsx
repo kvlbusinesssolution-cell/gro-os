@@ -17,10 +17,14 @@ import {
   Grid3x3,
   Boxes,
   MapPin,
+  Sparkles,
+  RotateCcw,
+  Download,
 } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { PollRefresher } from "@/components/command-center/poll-refresher";
 import { cn } from "@/lib/utils";
 import { requireActiveMembership } from "../_lib/require-membership";
@@ -40,6 +44,8 @@ import { getScanAnalytics } from "@/lib/scanner/scan-analytics";
 import { getRevenueForecast, getCashFlowProjection, type ForecastHorizon } from "@/lib/revenue/forecast";
 import { getCAC, getLTV, getLtvCacRatio } from "@/lib/revenue/cac-ltv";
 import { getMRR, getARR, getMonthlyChurnRate } from "@/lib/revenue/subscriptions";
+import { computeAcquisitionOverview } from "@/lib/analytics/acquisition-funnel";
+import { getAcquisitionInsights } from "@/lib/analytics/acquisition-insights";
 import { LineTrend } from "./_components/line-trend";
 import { BarTrend } from "./_components/bar-trend";
 import { RadarChart } from "./_components/radar-chart";
@@ -47,6 +53,8 @@ import { Heatmap } from "./_components/heatmap";
 import { Treemap } from "./_components/treemap";
 import { GeoWidget } from "./_components/geo-widget";
 import { AnalyticsReportExportMenu } from "./_components/analytics-report-export-menu";
+import { AcquisitionBreakdownTable } from "./_components/acquisition-breakdown-table";
+import { COMPANY_SOURCE_LABEL, barWidthPct, formatDateRangeLabel, maxCount, parseAcquisitionDateRange } from "./_lib/acquisition-display";
 
 const FORECAST_HORIZONS: Array<{ value: ForecastHorizon; label: string }> = [
   { value: "day", label: "Day" },
@@ -58,6 +66,22 @@ const FORECAST_HORIZONS: Array<{ value: ForecastHorizon; label: string }> = [
 
 function isForecastHorizon(value: string | undefined): value is ForecastHorizon {
   return value === "day" || value === "week" || value === "month" || value === "quarter" || value === "year";
+}
+
+/**
+ * Builds an `/dashboard/analytics` href that preserves whichever of
+ * `horizon`/`from`/`to` isn't being changed — the forecast-horizon nav and
+ * the Acquisition Overview date-range filter share this one URL, so
+ * switching one control must not silently reset the other (mirrors the
+ * company-discovery filter form's "one shared query string" convention).
+ */
+function buildAnalyticsHref(params: { horizon?: string; from?: string; to?: string }): string {
+  const sp = new URLSearchParams();
+  if (params.horizon) sp.set("horizon", params.horizon);
+  if (params.from) sp.set("from", params.from);
+  if (params.to) sp.set("to", params.to);
+  const qs = sp.toString();
+  return `/dashboard/analytics${qs ? `?${qs}` : ""}`;
 }
 
 const BAND_BAR_CLASS: Record<string, string> = {
@@ -72,7 +96,7 @@ const BAND_BAR_CLASS: Record<string, string> = {
 export default async function AnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ horizon?: string }>;
+  searchParams: Promise<{ horizon?: string; from?: string; to?: string }>;
 }) {
   const { membership } = await requireActiveMembership("/dashboard/analytics");
   const organizationId = membership.organizationId;
@@ -80,8 +104,9 @@ export default async function AnalyticsPage({
 
   await ensureTodaySnapshot(organizationId);
 
-  const { horizon: horizonParam } = await searchParams;
+  const { horizon: horizonParam, from: fromParam, to: toParam } = await searchParams;
   const horizon: ForecastHorizon = isForecastHorizon(horizonParam) ? horizonParam : "month";
+  const acquisitionDateRange = parseAcquisitionDateRange(fromParam, toParam);
 
   const currentMonthStart = new Date();
   currentMonthStart.setDate(1);
@@ -105,6 +130,7 @@ export default async function AnalyticsPage({
     companyHealth,
     taskHeatmap,
     revenueByCompany,
+    acquisitionOverview,
   ] = await Promise.all([
     getSnapshotTrend(organizationId, 30),
     getTaskCompletionTrend(organizationId, 14),
@@ -122,7 +148,14 @@ export default async function AnalyticsPage({
     computeCompanyHealth(organizationId),
     getTaskActivityHeatmap(organizationId, now),
     getRevenueByCompany(organizationId),
+    computeAcquisitionOverview(organizationId, acquisitionDateRange),
   ]);
+
+  // Narration is computed from the already-fetched `acquisitionOverview`
+  // above (getAcquisitionInsights makes zero Prisma queries of its own —
+  // see acquisition-insights.ts), so it has to run after the Promise.all,
+  // not inside it.
+  const acquisitionInsights = await getAcquisitionInsights(organizationId, acquisitionOverview);
 
   const healthAxes = [
     { label: "Business", value: companyHealth.business },
@@ -145,6 +178,8 @@ export default async function AnalyticsPage({
   const maxTech = Math.max(1, ...leadIntel.technologyTrends.map((t) => t.count));
   const maxScanBand = Math.max(1, ...scanIntel.bandDistribution.map((b) => b.count));
   const maxScanCategory = Math.max(1, ...scanIntel.topRecommendedCategories.map((c) => c.count));
+  const maxAcqFunnel = maxCount(acquisitionOverview.funnel.map((s) => s.count));
+  const acquisitionRangeLabel = formatDateRangeLabel(acquisitionDateRange);
 
   return (
     <main className="py-8">
@@ -613,7 +648,7 @@ export default async function AnalyticsPage({
               {FORECAST_HORIZONS.map((h) => (
                 <Link
                   key={h.value}
-                  href={`/dashboard/analytics?horizon=${h.value}`}
+                  href={buildAnalyticsHref({ horizon: h.value, from: fromParam, to: toParam })}
                   className={cn(
                     "inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
                     horizon === h.value
@@ -727,6 +762,232 @@ export default async function AnalyticsPage({
             </div>
           </CardContent>
         </Card>
+
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Acquisition Overview</h2>
+            <p className="text-sm text-muted-foreground">
+              Real source-attribution funnel — Company → Qualified Lead → Opportunity → Contact → Outreach Sent →
+              Reply → Meeting → Proposal → Won Deal — plus revenue by source, industry, country, and service.
+              Nothing here is estimated; the AI Insights card below only narrates the numbers computed here.
+            </p>
+          </div>
+          <a
+            href={`/api/export/acquisition?${new URLSearchParams({ ...(fromParam ? { from: fromParam } : {}), ...(toParam ? { to: toParam } : {}) }).toString()}`}
+            className="flex items-center gap-1.5 text-sm text-primary hover:underline"
+          >
+            <Download className="size-4" /> Export CSV
+          </a>
+        </div>
+
+        <Card glass>
+          <CardContent className="p-4">
+            <form className="flex flex-wrap items-end gap-3" action="/dashboard/analytics" method="GET">
+              <input type="hidden" name="horizon" value={horizon} />
+              <div className="flex flex-col gap-1">
+                <label htmlFor="acq-from" className="text-xs text-muted-foreground">
+                  From
+                </label>
+                <Input id="acq-from" name="from" type="date" defaultValue={fromParam ?? ""} className="w-40" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="acq-to" className="text-xs text-muted-foreground">
+                  To
+                </label>
+                <Input id="acq-to" name="to" type="date" defaultValue={toParam ?? ""} className="w-40" />
+              </div>
+              <button
+                type="submit"
+                className="h-11 rounded-lg bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                Apply
+              </button>
+              <Link
+                href={buildAnalyticsHref({ horizon })}
+                className="flex h-11 items-center gap-1.5 rounded-lg border border-border px-3.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+              >
+                <RotateCcw className="size-3.5" /> All time
+              </Link>
+              <span className="pb-2.5 text-xs text-muted-foreground">Showing: {acquisitionRangeLabel}</span>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card glass>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Filter className="size-4" /> Acquisition funnel
+            </CardTitle>
+            <CardDescription>Real counts per stage, {acquisitionRangeLabel.toLowerCase()}.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div>
+              <p className="text-xs text-muted-foreground">Total revenue (Won deals)</p>
+              <p className="text-2xl font-semibold text-primary">{formatCurrency(acquisitionOverview.totalRevenue, currency)}</p>
+            </div>
+            <div className="flex flex-col gap-3">
+              {acquisitionOverview.funnel.map((stage) => (
+                <div key={stage.stage} className="flex flex-col gap-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-medium text-foreground">{stage.stage}</span>
+                    <span className="text-muted-foreground">{stage.count}</span>
+                  </div>
+                  <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${barWidthPct(stage.count, maxAcqFunnel)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card glass>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="size-4" /> AI Insights
+            </CardTitle>
+            <CardDescription>
+              AI-narrated summary of the real numbers above (getAcquisitionInsights) — every sentence is grounded in
+              the already-computed acquisition data, never a separate AI query of its own.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {acquisitionInsights.insights.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No AI insights available yet.</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {acquisitionInsights.insights.map((insight, i) => (
+                  <li key={i} className="flex items-start gap-2 text-sm text-foreground">
+                    <Sparkles className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                    <span>{insight}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <Card glass>
+            <CardHeader>
+              <CardTitle className="text-base">By Source</CardTitle>
+              <CardDescription>Real counts and revenue per Company.source.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AcquisitionBreakdownTable
+                title="By source"
+                rows={acquisitionOverview.bySource.map((r) => ({ ...r, sourceLabel: COMPANY_SOURCE_LABEL[r.source as keyof typeof COMPANY_SOURCE_LABEL] ?? r.source }))}
+                filterKey="sourceLabel"
+                defaultSortKey="revenue"
+                emptyMessage="No companies yet."
+                columns={[
+                  { key: "sourceLabel", label: "Source" },
+                  { key: "companies", label: "Companies", align: "right" },
+                  { key: "qualifiedLeads", label: "Qualified", align: "right" },
+                  { key: "opportunities", label: "Opps", align: "right" },
+                  { key: "meetings", label: "Meetings", align: "right" },
+                  { key: "proposals", label: "Proposals", align: "right" },
+                  { key: "wonDeals", label: "Won", align: "right" },
+                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                ]}
+              />
+            </CardContent>
+          </Card>
+
+          <Card glass>
+            <CardHeader>
+              <CardTitle className="text-base">By Industry</CardTitle>
+              <CardDescription>Real counts and revenue per Company.industry.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AcquisitionBreakdownTable
+                title="By industry"
+                rows={acquisitionOverview.byIndustry}
+                filterKey="industry"
+                defaultSortKey="revenue"
+                emptyMessage="No industry data yet."
+                columns={[
+                  { key: "industry", label: "Industry" },
+                  { key: "companies", label: "Companies", align: "right" },
+                  { key: "wonDeals", label: "Won", align: "right" },
+                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                ]}
+              />
+            </CardContent>
+          </Card>
+
+          <Card glass>
+            <CardHeader>
+              <CardTitle className="text-base">By Country</CardTitle>
+              <CardDescription>Real counts and revenue per Company.headquartersCountry.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AcquisitionBreakdownTable
+                title="By country"
+                rows={acquisitionOverview.byCountry}
+                filterKey="country"
+                defaultSortKey="revenue"
+                emptyMessage="No headquarters location data yet."
+                columns={[
+                  { key: "country", label: "Country" },
+                  { key: "companies", label: "Companies", align: "right" },
+                  { key: "wonDeals", label: "Won", align: "right" },
+                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                ]}
+              />
+            </CardContent>
+          </Card>
+
+          <Card glass>
+            <CardHeader>
+              <CardTitle className="text-base">By Service</CardTitle>
+              <CardDescription>Real counts and revenue per recommended KVL service.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AcquisitionBreakdownTable
+                title="By service"
+                rows={acquisitionOverview.byService}
+                filterKey="service"
+                defaultSortKey="revenue"
+                emptyMessage="No AI-recommended services yet."
+                columns={[
+                  { key: "service", label: "Service" },
+                  { key: "opportunities", label: "Opps", align: "right" },
+                  { key: "wonDeals", label: "Won", align: "right" },
+                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                ]}
+              />
+            </CardContent>
+          </Card>
+
+          <Card glass>
+            <CardHeader>
+              <CardTitle className="text-base">By Campaign</CardTitle>
+              <CardDescription>Real per-campaign enrollment, outreach, and revenue conversion.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AcquisitionBreakdownTable
+                title="By campaign"
+                rows={acquisitionOverview.byCampaign.map((r) => ({ ...r }))}
+                filterKey="campaignName"
+                defaultSortKey="revenue"
+                emptyMessage="No campaigns yet."
+                columns={[
+                  { key: "campaignName", label: "Campaign" },
+                  { key: "contactsEnrolled", label: "Enrolled", align: "right" },
+                  { key: "emailsSent", label: "Sent", align: "right" },
+                  { key: "replies", label: "Replies", align: "right" },
+                  { key: "meetings", label: "Meetings", align: "right" },
+                  { key: "wonDeals", label: "Won", align: "right" },
+                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                ]}
+              />
+            </CardContent>
+          </Card>
+        </div>
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>

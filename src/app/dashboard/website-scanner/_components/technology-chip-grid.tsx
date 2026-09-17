@@ -9,6 +9,10 @@ const CATEGORY_LABELS: Record<TechnologyCategory, string> = {
   HOSTING: "Hosting",
   CDN: "CDN",
   ANALYTICS: "Analytics",
+  PAYMENT: "Payment",
+  BOOKING: "Booking",
+  CRM_INDICATOR: "CRM Indicator",
+  MESSAGING: "Messaging",
   OTHER: "Other",
 };
 

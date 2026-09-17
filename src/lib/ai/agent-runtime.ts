@@ -361,7 +361,7 @@ export async function runAgentTurn(params: {
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType, clientQuery: params.contextQuery }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })
@@ -436,7 +436,7 @@ export async function runAgentVote(params: {
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType, clientQuery: params.contextQuery }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })
@@ -495,7 +495,7 @@ export async function runDeliveryVoteTurn(params: {
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType, clientQuery: params.contextQuery }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })
@@ -559,7 +559,7 @@ export async function runMeetingAgentTurn(params: {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const meetingLabel = params.meetingLabel ?? "AI Executive Board meeting";
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType, clientQuery: params.contextQuery }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })
@@ -615,7 +615,7 @@ export async function runMeetingNotesTurn(params: {
 
   try {
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })
@@ -711,7 +711,7 @@ export async function runReviewAgentTurn(params: {
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType, clientQuery: params.contextQuery }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })
@@ -777,7 +777,7 @@ export async function runReviewVoteTurn(params: {
   try {
     const memoryContext = await loadAgentMemoryContext(params.agentId);
     const engineContext = params.organizationId
-      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, clientQuery: params.contextQuery }).catch((error) => {
+      ? await buildAgentContext(params.organizationId, { agentId: params.agentId, agentType: params.agentType, clientQuery: params.contextQuery }).catch((error) => {
           console.error("[agent-runtime] buildAgentContext failed, continuing without it:", error);
           return "";
         })

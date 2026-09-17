@@ -5,6 +5,9 @@ export const ja: Dictionary = {
   "nav.aiCommandCenter": "AIコマンドセンター",
   "nav.board": "AI エグゼクティブボード",
   "nav.companies": "会社",
+  "nav.companyDiscovery": "企業発見",
+  "nav.opportunities": "AIチャンス",
+  "nav.priorityQueue": "AI優先キュー",
   "nav.clients": "クライアント",
   "nav.promptLibrary": "プロンプトライブラリ",
   "nav.hr": "人事",
@@ -29,6 +32,7 @@ export const ja: Dictionary = {
   "nav.marketplace": "マーケットプレイス",
   "nav.agency": "代理店ポータル",
   "nav.partner": "パートナープログラム",
+  "nav.referralPartners": "紹介パートナー",
   "nav.settings": "設定",
 
   "topnav.search": "すべて検索…",

@@ -17,6 +17,9 @@ export const en = {
   "nav.aiCommandCenter": "AI Command Center",
   "nav.board": "AI Executive Board",
   "nav.companies": "Companies",
+  "nav.companyDiscovery": "Company Discovery",
+  "nav.opportunities": "AI Opportunities",
+  "nav.priorityQueue": "AI Priority Queue",
   "nav.clients": "Clients",
   "nav.promptLibrary": "Prompt Library",
   "nav.hr": "HR",
@@ -41,6 +44,7 @@ export const en = {
   "nav.marketplace": "Marketplace",
   "nav.agency": "Agency Portal",
   "nav.partner": "Partner Program",
+  "nav.referralPartners": "Referral Partners",
   "nav.settings": "Settings",
 
   // Top nav

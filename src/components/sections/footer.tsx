@@ -41,9 +41,12 @@ const LINK_GROUPS = [
   },
 ] as const;
 
-// Email/chat social icons are omitted rather than linked to "#" — no real
-// support email or live-chat tool exists yet; an absent icon reads as
-// honest, a dead-linked one doesn't.
+// Chat social icon is omitted rather than linked to "#" — no live-chat
+// tool exists yet; an absent icon reads as honest, a dead-linked one
+// doesn't. Email now has a real inbox (PLATFORM_SUPPORT_EMAIL), so it's
+// linked below.
+const SUPPORT_EMAIL = process.env.PLATFORM_SUPPORT_EMAIL || "support@kvlbusinesssolutions.com";
+
 const SOCIAL_LINKS = [{ label: "Website", icon: Globe, href: getSiteUrl() }] as const;
 
 function Footer() {
@@ -99,9 +102,17 @@ function Footer() {
           <p className="text-xs text-muted-foreground">
             © 2026 KVL Business Solutions. All rights reserved.
           </p>
-          <p className="text-xs text-muted-foreground">
-            Built for growth teams that move fast.
-          </p>
+          <div className="flex items-center gap-4">
+            <p className="text-xs text-muted-foreground">
+              Built for growth teams that move fast.
+            </p>
+            <a
+              href={`mailto:${SUPPORT_EMAIL}`}
+              className="text-xs text-muted-foreground transition-colors hover:text-foreground"
+            >
+              {SUPPORT_EMAIL}
+            </a>
+          </div>
         </div>
       </Container>
     </footer>

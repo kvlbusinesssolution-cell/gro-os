@@ -3,20 +3,20 @@ import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredRe
 import type { AIUsageProvider } from "@/generated/prisma/client";
 
 /**
- * Shared implementation for the two free-tier fallback providers that speak
- * the OpenAI-compatible `/chat/completions` shape (confirmed against each
- * provider's own integration adapter in src/lib/integrations/providers/ —
- * Groq's comments it as OpenAI-compatible outright; OpenRouter is a direct
- * proxy in front of OpenAI-compatible model backends). Gemini is NOT
- * OpenAI-compatible and gets its own adapter (gemini-provider.ts).
+ * Shared implementation for the three providers in the chain that speak the
+ * OpenAI-compatible `/chat/completions` shape: OpenAI itself (genuinely is
+ * this shape), Groq (documents itself as OpenAI-compatible outright), and
+ * OpenRouter (a direct proxy in front of OpenAI-compatible model backends).
+ * Gemini is NOT OpenAI-compatible and gets its own adapter
+ * (gemini-provider.ts).
  *
- * Neither provider gets the live `web_search` server tool Anthropic has —
+ * None of these get the live `web_search` server tool Anthropic has —
  * `webSearch` is accepted but ignored here (with a note appended to the
  * system prompt so the model doesn't silently pretend it searched live).
- * This is a real capability gap versus the primary provider, not a bug:
- * these are the FALLBACK tier, used only when Anthropic is unavailable, and
- * "answer from training knowledge, honestly labeled as such" beats "the
- * whole agent turn hard-fails."
+ * This is a real capability gap versus that provider, not a bug: whenever
+ * one of these three ends up serving a call meant for a web-search-capable
+ * provider, "answer from training knowledge, honestly labeled as such"
+ * beats "the whole agent turn hard-fails."
  */
 export function createOpenAICompatibleProvider(config: {
   id: AIUsageProvider;
@@ -24,7 +24,17 @@ export function createOpenAICompatibleProvider(config: {
   baseUrl: string;
   apiKeyEnvVar: string;
   extraHeaders?: Record<string, string>;
+  /**
+   * Which request-body field carries the output-token cap. Groq and
+   * OpenRouter both still accept the classic `max_tokens` (confirmed live
+   * against each API). OpenAI's own newer models (gpt-5.x, confirmed live
+   * 2026-09-17) reject `max_tokens` outright — "Unsupported parameter" —
+   * and require `max_completion_tokens` instead. Defaults to `max_tokens`
+   * so the two existing callers don't need to change.
+   */
+  maxTokensParam?: "max_tokens" | "max_completion_tokens";
 }): AIProviderAdapter {
+  const maxTokensParam = config.maxTokensParam ?? "max_tokens";
   function apiKey(): string | undefined {
     return process.env[config.apiKeyEnvVar];
   }
@@ -51,7 +61,7 @@ export function createOpenAICompatibleProvider(config: {
       },
       body: JSON.stringify({
         model: config.model,
-        max_tokens: maxTokens,
+        [maxTokensParam]: maxTokens,
         messages: [
           { role: "system", content: finalSystem },
           { role: "user", content: userContent },

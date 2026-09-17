@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { withCache } from "@/lib/cache/redis-cache";
 import { retrieveContext } from "@/lib/rag/retrieval";
+import { computeGrowthSignals } from "@/lib/ai/executive-briefing";
+import { EXECUTIVE_AGENT_TYPES, type ExecutiveAgentType } from "@/lib/ai/personas";
 
 /**
  * The Context Engine — assembles ONE real context string for grounding an AI
@@ -22,6 +24,14 @@ export interface AgentContextOptions {
   dealId?: string;
   projectId?: string;
   clientQuery?: string;
+  /**
+   * The calling agent's real AIAgentInstance.type, when known. Only used to
+   * decide whether to include `buildGrowthIntelligenceSection` below — every
+   * other section here is unconditional and unaffected by this field. Kept
+   * optional so every pre-existing caller that doesn't pass it behaves
+   * byte-for-byte as before (no growth-intelligence section, same as today).
+   */
+  agentType?: ExecutiveAgentType;
 }
 
 const CONTEXT_CACHE_TTL_SECONDS = 60;
@@ -206,6 +216,72 @@ async function buildOrganizationPreferencesSection(organizationId: string): Prom
   return ["## Organization Preferences", ...lines].join("\n");
 }
 
+// The only 5 AIAgentInstance types this section is ever assembled for — the
+// AI Executive Board / War Room's real participant set (same list
+// EXECUTIVE_AGENT_TYPES/isExecutiveAgentType in meeting-orchestrator.ts
+// already restrict live board meetings to). Every other agent type this app
+// has (Proposal Review Board's FINANCE/LEGAL/CRM/ANALYTICS seats, the
+// Delivery Board's PROJECT_MANAGER/QA_DIRECTOR/DEVOPS_DIRECTOR/
+// DELIVERY_DIRECTOR seats, marketplace agents, etc.) has no real use for
+// lead/opportunity/deal/proposal/referral pipeline data, so it's
+// deliberately excluded from this section rather than added unconditionally.
+const GROWTH_INTELLIGENCE_AGENT_TYPES = new Set<string>(EXECUTIVE_AGENT_TYPES);
+
+/**
+ * Real Phase 1-9 growth/pipeline intelligence — the same real, tested
+ * `computeGrowthSignals()` (src/lib/ai/executive-briefing.ts) the AI CEO
+ * Daily Brief already uses, reused directly here (never re-derived with a
+ * second set of queries) so a live War Room meeting turn can ground its
+ * discussion in real `LeadOpportunity`/`Reply`/`Deal`/`Proposal`/
+ * `ReferralPartner` data instead of only generic memory/meetings/decisions.
+ * Same real-fact-or-honest-fallback discipline as `buildDealSection` above:
+ * every line is either a real number from `computeGrowthSignals` or an
+ * explicit "not yet available" sentence — never a fabricated figure.
+ */
+export async function buildGrowthIntelligenceSection(organizationId: string): Promise<string | null> {
+  const signals = await computeGrowthSignals(organizationId);
+
+  const lines: string[] = ["## Real Growth Intelligence (as of now)"];
+
+  lines.push(
+    signals.newOpportunitiesCount > 0
+      ? `- ${signals.newOpportunitiesCount} new opportunity(ies) detected since yesterday.`
+      : "- No new opportunities detected since yesterday.",
+  );
+  lines.push(
+    signals.hotOpportunitiesCount > 0
+      ? `- ${signals.hotOpportunitiesCount} opportunity(ies) currently at HOT priority, awaiting action.`
+      : "- No HOT-priority opportunities on record right now.",
+  );
+
+  if (signals.repliesByIntent.length > 0) {
+    const intentLine = signals.repliesByIntent.map((r) => `${r.intent ?? "UNCLASSIFIED"}: ${r.count}`).join(", ");
+    lines.push(`- Replies received since yesterday, by intent: ${intentLine}.`);
+  } else {
+    lines.push("- No replies received since yesterday.");
+  }
+
+  lines.push(
+    signals.atRiskDealsCount > 0
+      ? `- ${signals.atRiskDealsCount} open deal(s) with no activity in 14+ days (at risk).`
+      : "- No open deals have gone quiet for 14+ days.",
+  );
+
+  lines.push(
+    signals.pendingProposalsCount > 0
+      ? `- ${signals.pendingProposalsCount} proposal(s) pending response (oldest: ${signals.oldestPendingProposalAgeDays} day(s)).`
+      : "- No proposals are currently pending a response.",
+  );
+
+  lines.push(
+    signals.referralPartnerCandidatesCount > 0
+      ? `- ${signals.referralPartnerCandidatesCount} referral-partner candidate(s) awaiting review.`
+      : "- No referral partner candidates awaiting review.",
+  );
+
+  return lines.join("\n");
+}
+
 /**
  * Assembles a single real context string for grounding an AI agent call.
  * Cached per `(organizationId, options)` for a short TTL via `withCache`
@@ -223,6 +299,9 @@ export async function buildAgentContext(organizationId: string, options: AgentCo
 
     if (options.dealId) sections.push(await buildDealSection(organizationId, options.dealId));
     if (options.projectId) sections.push(await buildProjectSection(organizationId, options.projectId));
+    if (options.agentType && GROWTH_INTELLIGENCE_AGENT_TYPES.has(options.agentType)) {
+      sections.push(await buildGrowthIntelligenceSection(organizationId));
+    }
     sections.push(await buildRecentMeetingsSection(organizationId));
     sections.push(await buildRecentDecisionsSection(organizationId));
     if (options.clientQuery) sections.push(await buildKnowledgeSection(organizationId, options.clientQuery));

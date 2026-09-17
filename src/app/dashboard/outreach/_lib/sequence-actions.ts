@@ -168,8 +168,18 @@ export interface AdvanceSequenceResult extends ActionResult {
  * the prior step was genuinely SENT and its configured delayDays have really
  * elapsed — this is an idempotent "is it due yet" check, safe to call
  * repeatedly (on page view or on a cron tick) with no duplicate side effects.
+ *
+ * Phase 6: a contact who has told us NOT_INTERESTED or UNSUBSCRIBED must
+ * never receive another generated step — checked first, before even loading
+ * the sequence, as an honest no-op (not an error) so a normal "nothing due
+ * yet" caller can't tell the difference from a suppressed one.
  */
 export async function advanceSequenceCore(contactId: string, sequenceId: string, organizationId: string): Promise<AdvanceSequenceResult> {
+  const contact = await prisma.contact.findUnique({ where: { id: contactId } });
+  if (contact && (contact.status === "NOT_INTERESTED" || contact.status === "UNSUBSCRIBED")) {
+    return { ok: true, advanced: false };
+  }
+
   const sequence = await prisma.sequence.findUnique({ where: { id: sequenceId } });
   if (!sequence || sequence.organizationId !== organizationId) return { ok: false, error: "Sequence not found.", advanced: false };
 

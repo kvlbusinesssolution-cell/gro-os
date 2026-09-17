@@ -5,6 +5,9 @@ export const ko: Dictionary = {
   "nav.aiCommandCenter": "AI 커맨드 센터",
   "nav.board": "AI 경영진 위원회",
   "nav.companies": "기업",
+  "nav.companyDiscovery": "기업 발굴",
+  "nav.opportunities": "AI 기회",
+  "nav.priorityQueue": "AI 우선순위 대기열",
   "nav.clients": "고객사",
   "nav.promptLibrary": "프롬프트 라이브러리",
   "nav.hr": "인사",
@@ -29,6 +32,7 @@ export const ko: Dictionary = {
   "nav.marketplace": "마켓플레이스",
   "nav.agency": "에이전시 포털",
   "nav.partner": "파트너 프로그램",
+  "nav.referralPartners": "추천 파트너",
   "nav.settings": "설정",
 
   "topnav.search": "전체 검색…",

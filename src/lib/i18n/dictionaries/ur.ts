@@ -5,6 +5,9 @@ export const ur: Dictionary = {
   "nav.aiCommandCenter": "اے آئی کمانڈ سینٹر",
   "nav.board": "اے آئی ایگزیکٹو بورڈ",
   "nav.companies": "کمپنیاں",
+  "nav.companyDiscovery": "کمپنی کی دریافت",
+  "nav.opportunities": "اے آئی مواقع",
+  "nav.priorityQueue": "اے آئی ترجیحی قطار",
   "nav.clients": "کلائنٹس",
   "nav.promptLibrary": "پرامپٹ لائبریری",
   "nav.hr": "ایچ آر",
@@ -29,6 +32,7 @@ export const ur: Dictionary = {
   "nav.marketplace": "مارکیٹ پلیس",
   "nav.agency": "ایجنسی پورٹل",
   "nav.partner": "پارٹنر پروگرام",
+  "nav.referralPartners": "ریفرل پارٹنرز",
   "nav.settings": "ترتیبات",
 
   "topnav.search": "سب کچھ تلاش کریں…",

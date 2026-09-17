@@ -37,11 +37,18 @@ export function flattenProposalSections(sections: ProposalSections): string {
   if (sections.architecture) parts.push(`Architecture\n${sections.architecture}`);
   if (sections.features.length) parts.push(`Features\n${sections.features.map((f) => `- ${f}`).join("\n")}`);
   if (sections.modules.length) parts.push(`Modules\n${sections.modules.map((m) => `- ${m}`).join("\n")}`);
+  // Phase 7 sections — guarded (`?.`/`?.length`) since Proposal.sections is a
+  // Json? column and rows generated before Phase 7 won't have these keys.
+  if (sections.scope) parts.push(`Scope\n${sections.scope}`);
   if (sections.timeline.length) parts.push(`Timeline\n${sections.timeline.map((t) => `- ${t.phase} (${t.duration})${t.description ? `: ${t.description}` : ""}`).join("\n")}`);
   if (sections.deliverables.length) parts.push(`Deliverables\n${sections.deliverables.map((d) => `- ${d}`).join("\n")}`);
+  if (sections.commercialStructure) parts.push(`Commercial Structure\n${sections.commercialStructure}`);
+  if (sections.assumptions?.length) parts.push(`Assumptions\n${sections.assumptions.map((a) => `- ${a}`).join("\n")}`);
+  if (sections.exclusions?.length) parts.push(`Exclusions\n${sections.exclusions.map((e) => `- ${e}`).join("\n")}`);
   if (sections.support) parts.push(`Support\n${sections.support}`);
   if (sections.warranty) parts.push(`Warranty\n${sections.warranty}`);
   if (sections.terms) parts.push(`Terms\n${sections.terms}`);
+  if (sections.nextSteps?.length) parts.push(`Next Steps\n${sections.nextSteps.map((n) => `- ${n}`).join("\n")}`);
   parts.push(`Call To Action\n${sections.callToAction}`);
   return parts.join("\n\n");
 }
@@ -65,6 +72,7 @@ export function buildProposalBlueprint(input: ProposalBlueprintInput): DocumentB
     }
     if (s.features.length) sections.push({ heading: "Features", bullets: s.features });
     if (s.modules.length) sections.push({ heading: "Modules", bullets: s.modules });
+    if (s.scope) sections.push({ heading: "Scope", body: s.scope });
     if (s.timeline.length) {
       sections.push({
         heading: "Timeline",
@@ -100,8 +108,12 @@ export function buildProposalBlueprint(input: ProposalBlueprintInput): DocumentB
     ]
       .filter(Boolean)
       .join("\n\n");
+    if (s.commercialStructure) sections.push({ heading: "Commercial Structure", body: s.commercialStructure });
+    if (s.assumptions?.length) sections.push({ heading: "Assumptions", bullets: s.assumptions });
+    if (s.exclusions?.length) sections.push({ heading: "Exclusions", bullets: s.exclusions });
     if (supportWarrantyTerms) sections.push({ heading: "Support, Warranty & Terms", body: supportWarrantyTerms });
-    sections.push({ heading: "Next Steps", body: s.callToAction });
+    const nextStepsBullets = s.nextSteps?.length ? s.nextSteps : undefined;
+    sections.push({ heading: "Next Steps", body: s.callToAction, bullets: nextStepsBullets });
   } else {
     sections.push({ heading: "Proposal", body: input.content });
   }

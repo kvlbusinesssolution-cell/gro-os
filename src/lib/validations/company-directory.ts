@@ -44,6 +44,12 @@ export const companySchema = z.object({
   fundingStage: z.string().trim().max(100).optional().or(z.literal("")),
   fundingAmount: z.coerce.number().nonnegative().optional(),
   language: z.string().trim().max(50).optional().or(z.literal("")),
+
+  // Attribution — which ReferralPartner (if any) referred this company in.
+  // Cross-org ownership is NOT validated here (this schema has no org
+  // context) — createCompany/updateCompany re-check it against the real
+  // ReferralPartner row before persisting. See actions.ts.
+  referralPartnerId: z.string().trim().optional().or(z.literal("")),
 });
 
 export type CompanyInput = z.input<typeof companySchema>;

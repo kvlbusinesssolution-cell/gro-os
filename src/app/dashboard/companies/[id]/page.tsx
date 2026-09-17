@@ -13,6 +13,7 @@ import {
   Building2,
   Link2,
   FileDown,
+  Handshake,
 } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
@@ -22,6 +23,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { prisma } from "@/lib/prisma";
 import { formatCurrency } from "@/app/dashboard/_lib/format";
 import { requireActiveMembership } from "@/app/dashboard/_lib/require-membership";
+import { partnerTypeLabel } from "@/app/dashboard/referral-partners/_lib/referral-partner-display";
 import { LeadScoreBadge } from "@/app/dashboard/_components/lead-score-badge";
 import { WatchlistPicker } from "@/app/dashboard/_components/watchlist-picker";
 import { CompanyEditForm } from "../_components/company-edit-form";
@@ -30,6 +32,8 @@ import { CompanyIntelligencePanel } from "../_components/company-intelligence-pa
 import { CompanyTimeline } from "../_components/company-timeline";
 import { CompanyMap } from "../_components/company-map";
 import { CrmActionsPanel } from "../_components/crm-actions-panel";
+import { CompanyEvidencePanel } from "../_components/company-evidence-panel";
+import { CompanyDiscoveryPanel } from "../_components/company-discovery-panel";
 
 export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -47,6 +51,19 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       researchNotes: { orderBy: { createdAt: "desc" }, take: 20 },
       timelineEvents: { orderBy: { occurredAt: "desc" }, take: 50 },
       watchlistEntries: { select: { watchlistId: true } },
+      evidence: { orderBy: { discoveredAt: "desc" }, take: 100 },
+      referralPartner: { select: { id: true, name: true, type: true, commissionRatePercent: true } },
+      websiteScans: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        include: {
+          seoAudit: { select: { seoScore: true } },
+          performanceAudit: { select: { performanceScore: true } },
+          securityAudit: { select: { securityScore: true } },
+          uxAudit: { select: { uxScore: true } },
+          technologies: true,
+        },
+      },
     },
   });
 
@@ -54,7 +71,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
     notFound();
   }
 
-  const [watchlists, members] = await Promise.all([
+  const [watchlists, members, referralPartners] = await Promise.all([
     prisma.watchlist.findMany({
       where: { organizationId: membership.organizationId },
       orderBy: { name: "asc" },
@@ -65,12 +82,42 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       select: { user: { select: { id: true, name: true } } },
       orderBy: { createdAt: "asc" },
     }),
+    // Only ACTIVE partners are offered for a NEW attribution (a CANDIDATE
+    // hasn't been confirmed as a real relationship yet) — see
+    // resolveReferralPartnerId's doc comment in companies/actions.ts. The
+    // company's own currently-set partner is always included too (even if
+    // since deactivated) via `company.referralPartner` below, so an existing
+    // attribution is never silently hidden or dropped by re-saving the form.
+    prisma.referralPartner.findMany({
+      where: { organizationId: membership.organizationId, status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
   ]);
 
   const canDelete = membership.role === "OWNER" || membership.role === "ADMIN";
+  // If the company's currently-set partner isn't (or is no longer) ACTIVE,
+  // still surface it as a selectable option in the edit form's dropdown so
+  // saving the form without touching this field doesn't silently clear it.
+  const referralPartnerOptions =
+    company.referralPartner && !referralPartners.some((p) => p.id === company.referralPartner!.id)
+      ? [...referralPartners, { id: company.referralPartner.id, name: company.referralPartner.name }]
+      : referralPartners;
   const socialLinks = (company.socialLinks ?? {}) as { linkedin?: string; facebook?: string; twitter?: string; instagram?: string };
   const hasHQ = company.headquartersCity || company.headquartersState || company.headquartersCountry;
   const latestReport = company.intelligenceRuns[0] ?? null;
+  const latestScanRow = company.websiteScans[0] ?? null;
+  const latestScan = latestScanRow
+    ? {
+        id: latestScanRow.id,
+        scannedAt: latestScanRow.scannedAt ? latestScanRow.scannedAt.toISOString() : null,
+        seoScore: latestScanRow.seoAudit?.seoScore ?? null,
+        performanceScore: latestScanRow.performanceAudit?.performanceScore ?? null,
+        securityScore: latestScanRow.securityAudit?.securityScore ?? null,
+        uxScore: latestScanRow.uxAudit?.uxScore ?? null,
+        technologies: latestScanRow.technologies,
+      }
+    : null;
 
   return (
     <main className="py-8">
@@ -120,6 +167,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
+            <TabsTrigger value="discovery">Discovery &amp; Evidence</TabsTrigger>
             <TabsTrigger value="timeline">Timeline ({company.timelineEvents.length})</TabsTrigger>
           </TabsList>
 
@@ -289,7 +337,9 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                     fundingStage: company.fundingStage ?? "",
                     fundingAmount: company.fundingAmount != null ? String(company.fundingAmount) : "",
                     language: company.language ?? "",
+                    referralPartnerId: company.referralPartnerId ?? "",
                   }}
+                  referralPartners={referralPartnerOptions}
                 />
               </div>
 
@@ -301,6 +351,28 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                   priority={company.priority}
                   members={members.map((m) => m.user)}
                 />
+
+                {company.referralPartner && (
+                  <Card glass>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Handshake className="size-4" /> Referral partner
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="pt-0">
+                      <Link
+                        href={`/dashboard/referral-partners/${company.referralPartner.id}`}
+                        className="font-medium text-foreground hover:underline"
+                      >
+                        {company.referralPartner.name}
+                      </Link>
+                      <p className="text-xs text-muted-foreground">
+                        {partnerTypeLabel(company.referralPartner.type)} · {company.referralPartner.commissionRatePercent}%
+                        commission rate
+                      </p>
+                    </CardContent>
+                  </Card>
+                )}
 
                 <Card glass>
                   <CardHeader>
@@ -462,6 +534,24 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
               }
               notes={company.researchNotes.map((n) => ({ ...n, createdAt: n.createdAt.toISOString() }))}
             />
+          </TabsContent>
+
+          <TabsContent value="discovery">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <CompanyDiscoveryPanel
+                website={company.website}
+                socialLinks={socialLinks}
+                technologies={company.technologies}
+                latestScan={latestScan}
+                sourceCount={company.sourceCount}
+                discoverySources={company.discoverySources}
+                lastDiscoveredAt={company.lastDiscoveredAt.toISOString()}
+                createdAt={company.createdAt.toISOString()}
+              />
+              <CompanyEvidencePanel
+                evidence={company.evidence.map((e) => ({ ...e, discoveredAt: e.discoveredAt.toISOString() }))}
+              />
+            </div>
           </TabsContent>
 
           <TabsContent value="timeline">

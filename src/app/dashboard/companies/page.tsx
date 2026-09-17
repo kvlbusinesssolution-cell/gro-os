@@ -33,7 +33,7 @@ const STATUS_VARIANT: Record<string, "outline" | "accent" | "default" | "seconda
 export default async function CompaniesPage() {
   const { membership } = await requireActiveMembership("/dashboard/companies");
 
-  const [companies, watchlists, stats] = await Promise.all([
+  const [companies, watchlists, stats, referralPartners] = await Promise.all([
     prisma.company.findMany({
       where: { organizationId: membership.organizationId },
       orderBy: { createdAt: "desc" },
@@ -49,6 +49,14 @@ export default async function CompaniesPage() {
       select: { id: true, name: true },
     }),
     getCompanyStats(membership.organizationId),
+    // Only ACTIVE referral partners are attributable — a CANDIDATE (AI-discovered,
+    // not yet recruited) hasn't been confirmed as a real relationship yet. See
+    // resolveReferralPartnerId's doc comment in companies/actions.ts.
+    prisma.referralPartner.findMany({
+      where: { organizationId: membership.organizationId, status: "ACTIVE" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
   ]);
 
   return (
@@ -74,7 +82,7 @@ export default async function CompaniesPage() {
             </Link>
             <ExportMenu />
             <CsvImportButton label="Import CSV/Excel" action={importCompaniesFile} />
-            <CompanyForm />
+            <CompanyForm referralPartners={referralPartners} />
           </div>
         </div>
 

@@ -21,6 +21,44 @@ export interface ActionResult {
 
 const EDITOR_ROLES = new Set(["OWNER", "ADMIN"]);
 
+export interface ResolvedReferralPartnerId {
+  ok: true;
+  referralPartnerId: string | null;
+}
+export interface ResolvedReferralPartnerError {
+  ok: false;
+  error: string;
+}
+
+/**
+ * Validates an optional `referralPartnerId` off the company form actually
+ * belongs to this org before it's ever persisted onto Company — the
+ * multi-tenant isolation boundary every prior phase enforces (never trust a
+ * bare id without an org-ownership check).
+ *
+ * Deliberately does NOT also require `status === "ACTIVE"` here: the picker
+ * in company-form.tsx/company-edit-form.tsx only *offers* ACTIVE partners
+ * for a NEW attribution (a CANDIDATE, AI-discovered and not yet recruited,
+ * shouldn't be newly attributable) — but re-enforcing that on every save
+ * would break saving unrelated field edits on a company whose partner was
+ * later deactivated, silently clearing a real, already-established
+ * attribution. Org ownership is the actual security boundary; ACTIVE-only is
+ * just curation of what's offered going forward.
+ */
+async function resolveReferralPartnerId(
+  organizationId: string,
+  referralPartnerId: string | undefined,
+): Promise<ResolvedReferralPartnerId | ResolvedReferralPartnerError> {
+  if (!referralPartnerId) return { ok: true, referralPartnerId: null };
+
+  const partner = await prisma.referralPartner.findUnique({ where: { id: referralPartnerId } });
+  if (!partner || partner.organizationId !== organizationId) {
+    return { ok: false, error: "That referral partner could not be found." };
+  }
+
+  return { ok: true, referralPartnerId: partner.id };
+}
+
 /** Shared field mapping for both create and update — keeps the two in sync as the profile schema grows. */
 function buildProfileData(parsed: z.output<typeof companySchema>) {
   const socialLinks =
@@ -86,6 +124,9 @@ export async function createCompany(input: CompanyInput): Promise<CreateCompanyR
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
   const organizationId = membership.organizationId;
 
+  const resolvedPartner = await resolveReferralPartnerId(organizationId, parsed.data.referralPartnerId);
+  if (!resolvedPartner.ok) return { ok: false, error: resolvedPartner.error };
+
   let coords: { lat: number; lng: number } | null = null;
   const hqQuery = [parsed.data.headquartersCity, parsed.data.headquartersState, parsed.data.headquartersCountry]
     .filter(Boolean)
@@ -97,7 +138,13 @@ export async function createCompany(input: CompanyInput): Promise<CreateCompanyR
       data: {
         ...buildProfileData(parsed.data),
         organizationId,
-        source: "MANUAL",
+        // This form never exposes a `source` field of its own — createCompany
+        // has always hardcoded "MANUAL" below. Picking a referral partner is
+        // the only source signal this submission can carry, so it's safe to
+        // let it choose "REFERRAL" here without silently overriding any
+        // explicit user choice elsewhere in the same form.
+        source: resolvedPartner.referralPartnerId ? "REFERRAL" : "MANUAL",
+        referralPartnerId: resolvedPartner.referralPartnerId,
         latitude: coords?.lat ?? null,
         longitude: coords?.lng ?? null,
       },
@@ -152,6 +199,9 @@ export async function updateCompany(companyId: string, input: CompanyInput): Pro
       return { ok: false, error: "Company not found." };
     }
 
+    const resolvedPartner = await resolveReferralPartnerId(membership.organizationId, parsed.data.referralPartnerId);
+    if (!resolvedPartner.ok) return { ok: false, error: resolvedPartner.error };
+
     let coords: { lat: number; lng: number } | null = null;
     if (existing.latitude == null || existing.longitude == null) {
       const hqQuery = [parsed.data.headquartersCity, parsed.data.headquartersState, parsed.data.headquartersCountry]
@@ -164,6 +214,7 @@ export async function updateCompany(companyId: string, input: CompanyInput): Pro
       where: { id: companyId },
       data: {
         ...buildProfileData(parsed.data),
+        referralPartnerId: resolvedPartner.referralPartnerId,
         ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
       },
     });

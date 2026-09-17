@@ -11,6 +11,7 @@ import { evaluateAutomationRules } from "@/lib/automation-engine";
 import { fireWorkflowTrigger } from "@/lib/workflows/triggers";
 import { convertWonDealToProject } from "@/lib/projects/deal-conversion";
 import { storeAgentMemory } from "@/lib/ai/agent-runtime";
+import { generatePartnerCommissionForDeal } from "@/lib/business-development/partner-commission";
 import { dealSchema, type DealInput } from "@/lib/validations/crm";
 
 export interface ActionResult {
@@ -279,6 +280,18 @@ export async function moveDealStage(dealId: string, targetStageId: string): Prom
         }
       } catch (memoryError) {
         console.error("[crm] storeAgentMemory for DEAL_WON failed:", memoryError);
+      }
+
+      // Phase 8 (Partner & Referral Client Acquisition Engine) — completes
+      // the Deal -> Revenue -> Commission tail when this deal's Company was
+      // referred by an ACTIVE ReferralPartner. Silent no-op for the (normal,
+      // majority) case of no referral partner. Same fire-and-forget
+      // discipline as storeAgentMemory above: never breaks the real
+      // deal-won transition.
+      try {
+        await generatePartnerCommissionForDeal(dealId);
+      } catch (commissionError) {
+        console.error("[crm] generatePartnerCommissionForDeal for DEAL_WON failed:", commissionError);
       }
     } else if (targetStage.name === "Lost") {
       await notifyOrganizationOwners({

@@ -5,6 +5,9 @@ export const hi: Dictionary = {
   "nav.aiCommandCenter": "एआई कमांड सेंटर",
   "nav.board": "एआई एग्जीक्यूटिव बोर्ड",
   "nav.companies": "कंपनियां",
+  "nav.companyDiscovery": "कंपनी खोज",
+  "nav.opportunities": "एआई अवसर",
+  "nav.priorityQueue": "एआई प्राथमिकता कतार",
   "nav.clients": "क्लाइंट्स",
   "nav.promptLibrary": "प्रॉम्प्ट लाइब्रेरी",
   "nav.hr": "एचआर",
@@ -29,6 +32,7 @@ export const hi: Dictionary = {
   "nav.marketplace": "मार्केटप्लेस",
   "nav.agency": "एजेंसी पोर्टल",
   "nav.partner": "पार्टनर प्रोग्राम",
+  "nav.referralPartners": "रेफरल पार्टनर",
   "nav.settings": "सेटिंग्स",
 
   "topnav.search": "सब कुछ खोजें…",

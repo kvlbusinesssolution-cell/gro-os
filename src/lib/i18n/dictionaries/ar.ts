@@ -5,6 +5,9 @@ export const ar: Dictionary = {
   "nav.aiCommandCenter": "مركز قيادة الذكاء الاصطناعي",
   "nav.board": "مجلس الإدارة الذكي",
   "nav.companies": "الشركات",
+  "nav.companyDiscovery": "اكتشاف الشركات",
+  "nav.opportunities": "فرص الذكاء الاصطناعي",
+  "nav.priorityQueue": "قائمة أولويات الذكاء الاصطناعي",
   "nav.clients": "العملاء",
   "nav.promptLibrary": "مكتبة الإرشادات",
   "nav.hr": "الموارد البشرية",
@@ -29,6 +32,7 @@ export const ar: Dictionary = {
   "nav.marketplace": "المتجر",
   "nav.agency": "بوابة الوكالة",
   "nav.partner": "برنامج الشركاء",
+  "nav.referralPartners": "شركاء الإحالة",
   "nav.settings": "الإعدادات",
 
   "topnav.search": "ابحث في كل شيء…",

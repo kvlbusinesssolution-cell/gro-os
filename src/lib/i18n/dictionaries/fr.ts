@@ -5,6 +5,9 @@ export const fr: Dictionary = {
   "nav.aiCommandCenter": "Centre de Commande IA",
   "nav.board": "Conseil Exécutif IA",
   "nav.companies": "Entreprises",
+  "nav.companyDiscovery": "Découverte d'Entreprises",
+  "nav.opportunities": "Opportunités IA",
+  "nav.priorityQueue": "File d'Attente Prioritaire IA",
   "nav.clients": "Clients",
   "nav.promptLibrary": "Bibliothèque de Prompts",
   "nav.hr": "RH",
@@ -29,6 +32,7 @@ export const fr: Dictionary = {
   "nav.marketplace": "Marché",
   "nav.agency": "Portail Agence",
   "nav.partner": "Programme Partenaire",
+  "nav.referralPartners": "Partenaires de Référence",
   "nav.settings": "Paramètres",
 
   "topnav.search": "Tout rechercher…",
