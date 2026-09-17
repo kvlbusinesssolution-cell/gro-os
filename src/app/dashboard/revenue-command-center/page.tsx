@@ -1,10 +1,15 @@
+import Link from "next/link";
 import { Gauge, Building2, ShieldCheck, Flame, Rocket, Mail, MessageSquare, CalendarCheck, FileText, Trophy, Wallet, HelpCircle } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent } from "@/components/ui/card";
 import { AnimatedCounter } from "@/components/ui/animated-counter";
 import { requireActiveMembership } from "../_lib/require-membership";
-import { computeRevenueCommandCenterToday, computeRevenueCommandCenterFunnel } from "@/lib/business-development/revenue-command-center";
+import {
+  computeRevenueCommandCenterToday,
+  computeRevenueCommandCenterFunnel,
+  emailCenterLinkForTile,
+} from "@/lib/business-development/revenue-command-center";
 
 function formatCurrency(value: number | null): string {
   if (value === null) return "—";
@@ -54,30 +59,52 @@ export default async function RevenueCommandCenterPage() {
         <div>
           <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Today</h2>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
-            {TODAY_TILES.map(({ key, label, icon: Icon }) => (
-              <Card key={key} glass>
-                <CardContent className="flex flex-col gap-1.5 p-4">
-                  <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <Icon className="size-3.5" /> {label}
-                  </span>
-                  <span className="text-2xl font-semibold tracking-tight text-foreground">
-                    <AnimatedCounter value={today[key]} />
-                  </span>
-                </CardContent>
-              </Card>
-            ))}
-            <Card glass>
-              <CardContent className="flex flex-col gap-1.5 p-4">
-                <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                  <Wallet className="size-3.5" /> Open Pipeline Value
-                </span>
-                <span className="text-2xl font-semibold tracking-tight text-foreground">{formatCurrency(today.pipelineValue)}</span>
-                <span className="text-[11px] text-muted-foreground">
-                  {today.pipelineDealCount} open deal{today.pipelineDealCount === 1 ? "" : "s"} sourced from this pipeline — a running
-                  total, not a today-only figure.
-                </span>
-              </CardContent>
-            </Card>
+            {TODAY_TILES.map(({ key, label, icon: Icon }) => {
+              const href = emailCenterLinkForTile(key);
+              const tile = (
+                <Card glass className={href ? "transition-colors hover:border-primary/40" : undefined}>
+                  <CardContent className="flex flex-col gap-1.5 p-4">
+                    <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <Icon className="size-3.5" /> {label}
+                    </span>
+                    <span className="text-2xl font-semibold tracking-tight text-foreground">
+                      <AnimatedCounter value={today[key]} />
+                    </span>
+                  </CardContent>
+                </Card>
+              );
+              return href ? (
+                <Link key={key} href={href} className="block">
+                  {tile}
+                </Link>
+              ) : (
+                <div key={key}>{tile}</div>
+              );
+            })}
+            {(() => {
+              const pipelineHref = emailCenterLinkForTile("pipelineValue");
+              const pipelineTile = (
+                <Card glass className={pipelineHref ? "transition-colors hover:border-primary/40" : undefined}>
+                  <CardContent className="flex flex-col gap-1.5 p-4">
+                    <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <Wallet className="size-3.5" /> Open Pipeline Value
+                    </span>
+                    <span className="text-2xl font-semibold tracking-tight text-foreground">{formatCurrency(today.pipelineValue)}</span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {today.pipelineDealCount} open deal{today.pipelineDealCount === 1 ? "" : "s"} sourced from this pipeline — a
+                      running total, not a today-only figure.
+                    </span>
+                  </CardContent>
+                </Card>
+              );
+              return pipelineHref ? (
+                <Link href={pipelineHref} className="block">
+                  {pipelineTile}
+                </Link>
+              ) : (
+                pipelineTile
+              );
+            })()}
           </div>
           <p className="mt-2 flex items-start gap-1.5 text-xs text-muted-foreground">
             <HelpCircle className="mt-0.5 size-3.5 shrink-0" />

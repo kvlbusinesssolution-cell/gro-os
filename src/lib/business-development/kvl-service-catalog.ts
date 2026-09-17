@@ -10,6 +10,25 @@
  * vs BUSINESS_AUTOMATION vs AI_AUTOMATION) each call out what makes them the
  * right (or wrong) fit.
  */
+
+/**
+ * KVL's real, owner-confirmed pricing model (set 2026-09-17): every service
+ * is scope-based, not a fixed package price — the real rate depends entirely
+ * on how big/complex the actual work is. `minRateINR` is the one hard floor
+ * across every service (KVL will not take on work priced below this); there
+ * is deliberately NO fixed ceiling constant here — real quotes have ranged
+ * from a simple ₹25,000 site up to ₹1,20,00,000+ enterprise builds, and
+ * inventing a fixed max would misrepresent KVL's actual range. Any AI-
+ * generated rate recommendation (see rate-negotiation.ts) must ground itself
+ * in this floor plus the real scope evidence available — never a guessed
+ * number with no basis.
+ */
+export const KVL_PRICING = {
+  minRateINR: 25_000,
+  currency: "INR" as const,
+  note: "Scope-based pricing — final rate depends on the real size/complexity of the work; no fixed ceiling. Below the floor, KVL can negotiate down when justified, but every discount below the floor requires real owner sign-off (see rate-negotiation.ts).",
+};
+
 export const KVL_SERVICES = [
   {
     id: "WEBSITE_DEVELOPMENT",
@@ -82,6 +101,12 @@ export const KVL_SERVICES = [
     label: "Custom Software Development",
     description:
       "Building bespoke internal software or tooling tailored to the company's own unique operations (not sold externally, not a SaaS product, not a public-facing website or app) — for needs too specific for any off-the-shelf CRM, ERP, or automation tool to solve.",
+  },
+  {
+    id: "SOCIAL_MEDIA_ADVERTISING",
+    label: "Social Media Advertising",
+    description:
+      "Planning and running paid social media ad campaigns (Meta/Instagram/LinkedIn/etc.) — audience targeting, ad creative, budget management, and campaign optimization to drive leads/sales — distinct from organic SEO (see SEO) and from building a website or app itself.",
   },
 ] as const;
 

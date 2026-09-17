@@ -54,6 +54,52 @@ export interface RevenueCommandCenterFunnel {
   proposalToDealRate: number | null;
 }
 
+/**
+ * Maps each Revenue Command Center tile to the real, existing page it should
+ * deep-link to — never a fabricated route. Returns `null` when no honest
+ * destination exists yet, in which case callers should render the tile as
+ * plain (non-linked) text rather than link to `#` or an invented URL.
+ *
+ * - companiesFound/qualified/highIntent/readyForOutreach are Company
+ *   Discovery concepts, not Email Center ones — they link to the real
+ *   existing Company Discovery page.
+ * - emailsSent/replies link into the real Email Center inbox
+ *   (src/app/dashboard/outreach/inbox/page.tsx), using that page's actual
+ *   `?view=` values (`inbox`, `sent`, `drafts` today — there is no
+ *   `?view=replies` tab, so replies use `?view=inbox`, where real inbound
+ *   Replies are genuinely rendered).
+ * - meetings links to the CRM calendar (src/app/dashboard/crm/calendar/page.tsx),
+ *   which genuinely renders OutreachMeeting rows (KIND_LABEL.outreachMeeting
+ *   = "Meeting") — the only real, existing meetings view in this app today.
+ * - proposals links to the Proposal Engine home.
+ * - won/pipelineValue link to the real Deals board
+ *   (src/app/dashboard/crm/deals/page.tsx), which has no per-stage query-param
+ *   filter today, so both link to the same unfiltered board rather than an
+ *   invented `?stage=Won` route.
+ */
+export function emailCenterLinkForTile(tileKey: string): string | null {
+  switch (tileKey) {
+    case "companiesFound":
+    case "qualified":
+    case "highIntent":
+    case "readyForOutreach":
+      return "/dashboard/company-discovery";
+    case "emailsSent":
+      return "/dashboard/outreach/inbox?view=sent";
+    case "replies":
+      return "/dashboard/outreach/inbox?view=inbox";
+    case "meetings":
+      return "/dashboard/crm/calendar";
+    case "proposals":
+      return "/dashboard/proposal";
+    case "won":
+    case "pipelineValue":
+      return "/dashboard/crm/deals";
+    default:
+      return null;
+  }
+}
+
 export async function computeRevenueCommandCenterToday(organizationId: string, now: Date = new Date()): Promise<RevenueCommandCenterToday> {
   const dayStart = startOfDay(now);
 

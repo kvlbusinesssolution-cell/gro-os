@@ -48,11 +48,19 @@ export default async function CrmDashboardPage() {
   return (
     <main className="py-8">
       <Container className="flex flex-col gap-8">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">CRM Dashboard</h1>
-          <p className="text-sm text-muted-foreground">
-            Your sales pipeline at a glance — real numbers from Deals, Tasks, and Meetings, updated live.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">CRM Dashboard</h1>
+            <p className="text-sm text-muted-foreground">
+              Your sales pipeline at a glance — real numbers from Deals, Tasks, and Meetings, updated live.
+            </p>
+          </div>
+          <Link
+            href="/dashboard/crm/sales-view"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <Users className="size-3.5" /> Client-wise Sales View
+          </Link>
         </div>
 
         <section className="flex flex-col gap-4">

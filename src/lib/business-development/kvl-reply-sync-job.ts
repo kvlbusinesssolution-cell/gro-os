@@ -4,7 +4,8 @@ import { simpleParser } from "mailparser";
 import { prisma } from "@/lib/prisma";
 import { logReplyCore } from "@/app/dashboard/outreach/_lib/reply-actions";
 import { applyReplyAutomation } from "@/lib/outreach/reply-automation";
-import { resolveKvlOrganizationId, KVL_OWNER_EMAIL, KVL_OUTREACH_CAMPAIGN_NAME } from "./kvl-sector-discovery-job";
+import { resolveKvlOrganizationId, KVL_OWNER_EMAIL, KVL_OWNER_REPORT_EMAIL, KVL_OUTREACH_CAMPAIGN_NAME } from "./kvl-sector-discovery-job";
+import { initiateRateNegotiation, completeRateNegotiationAfterOwnerReply } from "./rate-negotiation";
 import type { JobRunLog } from "@/lib/scheduler/types";
 
 /**
@@ -82,6 +83,34 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
             continue;
           }
 
+          // Real owner-in-the-loop rate-negotiation escalation
+          // (rate-negotiation.ts): the owner replies to the same shared
+          // inbox this job polls (their natural "Reply" to the escalation
+          // email this job's sibling flow sent from this same address), so
+          // an incoming message FROM the owner's own report address is
+          // never a client reply — it's the owner's real decision on the
+          // most recent still-open negotiation thread for this org. Single
+          // owner, single open thread at a time is a fair real-world
+          // assumption for KVL's own team size; documented, not hidden.
+          if (fromAddress === KVL_OWNER_REPORT_EMAIL.toLowerCase()) {
+            const negotiation = await prisma.rateNegotiation.findFirst({
+              where: { organizationId, status: "AWAITING_OWNER" },
+              orderBy: { createdAt: "desc" },
+            });
+            if (negotiation) {
+              const result = await completeRateNegotiationAfterOwnerReply(negotiation.id, bodyText);
+              if (result.ok) {
+                logs.push({ level: "info", message: `Owner's rate decision captured for negotiation ${negotiation.id} — reply-to-client draft ${result.draftId} and closing meeting ${result.meetingId} created.`, organizationId });
+              } else {
+                logs.push({ level: "error", message: `Failed to complete rate negotiation ${negotiation.id}: ${result.error}`, organizationId });
+              }
+            } else {
+              logs.push({ level: "info", message: `Owner replied from ${fromAddress} but no negotiation is currently AWAITING_OWNER — treated as a normal owner email, not logged as a client reply.`, organizationId });
+            }
+            await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+            continue;
+          }
+
           const contact = await prisma.contact.findFirst({ where: { organizationId, email: fromAddress } });
           if (!contact) {
             unmatchedCount += 1;
@@ -107,6 +136,24 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
                 await applyReplyAutomation(result.replyId);
               } catch (error) {
                 logs.push({ level: "error", message: `applyReplyAutomation failed for reply ${result.replyId}: ${error instanceof Error ? error.message : String(error)}`, organizationId });
+              }
+
+              // Real owner-in-the-loop rate escalation — only for a real
+              // client reply classified as specifically asking about price,
+              // and only via this real IMAP-captured path (see
+              // rate-negotiation.ts's own doc comment for why this is never
+              // wired into the generic, multi-tenant applyReplyAutomation).
+              if (result.intent === "PRICE_QUESTION") {
+                try {
+                  const negotiationResult = await initiateRateNegotiation(result.replyId);
+                  if (negotiationResult.ok) {
+                    logs.push({ level: "info", message: `Rate negotiation ${negotiationResult.negotiationId} started — owner emailed at ${KVL_OWNER_REPORT_EMAIL} for a rate decision.`, organizationId });
+                  } else {
+                    logs.push({ level: "error", message: `initiateRateNegotiation failed for reply ${result.replyId}: ${negotiationResult.error}`, organizationId });
+                  }
+                } catch (error) {
+                  logs.push({ level: "error", message: `initiateRateNegotiation threw for reply ${result.replyId}: ${error instanceof Error ? error.message : String(error)}`, organizationId });
+                }
               }
             }
           } else {

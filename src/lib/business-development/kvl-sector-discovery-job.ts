@@ -32,8 +32,12 @@ import { findOrCreateCompany } from "./dedup";
  */
 export const KVL_OWNER_EMAIL = "kamaralamjdu@gmail.com";
 const DIGEST_RECIPIENTS = ["kvlbusinesssolution@gmail.com"];
+/** Same inbox the daily report already goes to — reused as the one real address the owner reads and replies from for the rate-negotiation escalation (rate-negotiation.ts / kvl-reply-sync-job.ts). */
+export const KVL_OWNER_REPORT_EMAIL = DIGEST_RECIPIENTS[0];
 const DAILY_MIN = 20;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+/** Owner-confirmed real monthly revenue target (set 2026-09-17), in INR — reported in the daily owner report against real won-deal value so far this calendar month. */
+const KVL_MONTHLY_REVENUE_TARGET_INR = 600_000;
 
 interface CountryQuery {
   country: string;
@@ -455,7 +459,9 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
   if (!campaign) return [{ level: "warn", message: "Skipped — KVL Sector Outreach campaign doesn't exist yet (no run has happened).", organizationId }];
 
   const todayStart = startOfTodayIST();
-  const [drafts, replies] = await Promise.all([
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  const monthStartIst = new Date(Date.UTC(istNow.getUTCFullYear(), istNow.getUTCMonth(), 1, 0, 0, 0) - IST_OFFSET_MS);
+  const [drafts, replies, wonDealsThisMonth] = await Promise.all([
     prisma.emailDraft.findMany({
       where: { organizationId, campaignId: campaign.id, createdAt: { gte: todayStart } },
       include: { contact: { include: { company: true } } },
@@ -466,7 +472,19 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
       include: { contact: { include: { company: true } } },
       orderBy: { receivedAt: "asc" },
     }),
+    // Real, not a fabricated estimate — same "best-effort proxy" caveat as
+    // revenue-command-center.ts's own `won` count: Deal has no dedicated
+    // wonAt timestamp, so "updatedAt this month" is the closest real signal
+    // for "moved to Won this month" without inventing one.
+    prisma.deal.findMany({
+      where: { organizationId, dealStage: { name: "Won" }, updatedAt: { gte: monthStartIst } },
+      select: { value: true },
+    }),
   ]);
+
+  const monthRevenueINR = wonDealsThisMonth.reduce((sum, d) => sum + (d.value ?? 0), 0);
+  const monthProgressPct = Math.min(100, Math.round((monthRevenueINR / KVL_MONTHLY_REVENUE_TARGET_INR) * 100));
+  const monthLabel = istNow.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 
   const sentDrafts = drafts.filter((d) => d.status === "SENT");
   const failedDrafts = drafts.filter((d) => d.status === "FAILED");
@@ -495,6 +513,8 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
     `Real replies received today (${replies.length}):`,
     replySection,
     "",
+    `${monthLabel} revenue so far (real Won deals): ₹${monthRevenueINR.toLocaleString("en-IN")} / ₹${KVL_MONTHLY_REVENUE_TARGET_INR.toLocaleString("en-IN")} target (${monthProgressPct}%)`,
+    "",
     "Final deal-closing is entirely on you — nothing here negotiates or moves a deal stage automatically.",
   ].join("\n");
 
@@ -522,6 +542,7 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
             .join("")}</ul>`
         : `<p>${imapConfigured() ? "No replies today." : "Real inbox reading isn't configured yet — set KVL_IMAP_HOST/KVL_IMAP_USER/KVL_IMAP_PASSWORD to start auto-capturing replies."}</p>`
     }
+    <p><strong>${monthLabel} revenue so far (real Won deals): ₹${monthRevenueINR.toLocaleString("en-IN")} / ₹${KVL_MONTHLY_REVENUE_TARGET_INR.toLocaleString("en-IN")} target (${monthProgressPct}%)</strong></p>
     <p>Final deal-closing is entirely on you — nothing here negotiates or moves a deal stage automatically.</p>
   `;
 

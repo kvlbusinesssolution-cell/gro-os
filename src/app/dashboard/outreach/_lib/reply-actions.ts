@@ -87,6 +87,7 @@ async function analyzeReply(content: string): Promise<ReplyAnalysis> {
 export interface LogReplyResult extends ActionResult {
   replyId?: string;
   sentiment?: ReplySentiment | null;
+  intent?: ReplyIntent | null;
 }
 
 /**
@@ -155,7 +156,7 @@ export async function logReplyCore(
   await logAudit({ userId: loggedByUserId, organizationId, action: "outreach.reply_logged", metadata: { contactId, replyId: reply.id, sentiment } });
   revalidatePath("/dashboard/outreach");
   revalidatePath(`/dashboard/outreach/contacts/${contactId}`);
-  return { ok: true, replyId: reply.id, sentiment };
+  return { ok: true, replyId: reply.id, sentiment, intent };
 }
 
 /** The real, manual "I got a reply" entry point — session-gated wrapper around logReplyCore. */

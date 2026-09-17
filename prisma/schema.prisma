@@ -537,6 +537,9 @@ model Organization {
   accessReviews  AccessReview[]
   consentRecords ConsentRecord[]
 
+  // KVL-only owner rate-negotiation escalation
+  rateNegotiations RateNegotiation[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -1596,6 +1599,8 @@ model Company {
   // Phase 4: deterministic buying-intent score, computed from this
   // company's own CompanyIntelligence signal lists + CompanyEvidence rows.
   intentScore       IntentScore?
+  // KVL-only owner rate-negotiation escalation threads for this company.
+  rateNegotiations  RateNegotiation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1846,6 +1851,11 @@ model Document {
   linkedInvoiceId          String?
   linkedBusinessDocumentId String?
   linkedTaskId             String?
+  // Phase 3 Email Center — a real attachment on a Compose'd EmailDraft,
+  // reusing this existing generic Document/storage model rather than a new
+  // attachments table (same "linked*Id" convention as every other
+  // linkable entity above).
+  linkedEmailDraftId       String?
   uploadedByUserId         String?
   // Gates whether the Client Portal's file list can show this row — never
   // shown to a client by default.
@@ -1861,12 +1871,14 @@ model Document {
   linkedInvoice          Invoice?          @relation(fields: [linkedInvoiceId], references: [id], onDelete: SetNull)
   linkedBusinessDocument BusinessDocument? @relation(fields: [linkedBusinessDocumentId], references: [id], onDelete: SetNull)
   linkedTask             Task?             @relation(fields: [linkedTaskId], references: [id], onDelete: SetNull)
+  linkedEmailDraft       EmailDraft?       @relation(fields: [linkedEmailDraftId], references: [id], onDelete: SetNull)
   uploadedByUser         User?             @relation("DocumentUploadedBy", fields: [uploadedByUserId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
   @@index([organizationId])
   @@index([linkedTaskId])
+  @@index([linkedEmailDraftId])
 }
 
 // ============================= Phase 12: Enterprise Document Generation =============================
@@ -4777,6 +4789,7 @@ model Contact {
   deals            Deal[]
   reminders        Reminder[]
   quotations       Quotation[]
+  rateNegotiations RateNegotiation[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4873,6 +4886,16 @@ model EmailDraft {
   generatedByAgentId   String?
   approvedByUserId     String?
   approvedAt           DateTime?
+  // Phase 3 Email Center — a real future send time set from Compose's
+  // "Schedule" action. Distinct from `queuedAt`, which existing code
+  // (approval-actions.ts's queueDraft/sendQueuedDraft) sets only the
+  // instant a draft is queued for IMMEDIATE send — this field means "send
+  // no earlier than this real timestamp." Null for every draft sent through
+  // the normal Approve -> Queue -> Send path unchanged by this feature; a
+  // scheduled-send job promotes a still-APPROVED draft with a due
+  // `scheduledFor` to QUEUED, at which point the existing send pipeline
+  // takes over unmodified.
+  scheduledFor         DateTime?
   queuedAt             DateTime?
   sentAt               DateTime?
   failedReason         String?
@@ -4908,6 +4931,7 @@ model EmailDraft {
   approvals        Approval[]
   replies          Reply[]
   outreachMeetings OutreachMeeting[]
+  attachments      Document[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4961,17 +4985,88 @@ model Reply {
   suggestedResponse String?         @db.Text
   loggedByUserId    String
   receivedAt        DateTime        @default(now())
+  // Phase 3 Email Center — explicit "marked as read" action, persisted
+  // independent of message ordering. Distinct from inbox.ts's computed
+  // `unread` (latest-event comparison, still used as the default state for
+  // a reply nobody has opened yet) — this is the real, sticky record of a
+  // human actually opening the thread. Null means never explicitly opened.
+  readAt            DateTime?
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
   campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   emailDraft   EmailDraft?  @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
   loggedByUser User         @relation(fields: [loggedByUserId], references: [id], onDelete: Cascade)
+  // KVL's own owner-escalation workflow (see RateNegotiation below) — a
+  // reply classified PRICE_QUESTION gets exactly one negotiation thread.
+  rateNegotiation RateNegotiation?
 
   createdAt DateTime @default(now())
 
   @@index([organizationId])
   @@index([contactId])
+}
+
+enum RateNegotiationStatus {
+  // AI has emailed the real owner with the client's ask + a grounded rate
+  // recommendation; waiting for the owner's real reply.
+  AWAITING_OWNER
+  // Owner replied (captured via the same real IMAP mailbox as client
+  // replies — kvl-reply-sync-job.ts) with their final decision.
+  OWNER_RESPONDED
+  // The owner-approved reply-to-client draft has been sent, and the
+  // owner<->client closing meeting has been requested.
+  CLIENT_REPLIED
+}
+
+// KVL-only (this org's own outreach, same "hardcoded to KVL" convention as
+// kvl-sector-discovery-job.ts / kvl-reply-sync-job.ts) real owner-in-the-loop
+// pricing escalation: a client's PRICE_QUESTION reply triggers a real email
+// to the real business owner with a grounded rate recommendation (never a
+// fabricated number); the owner's own real reply (captured via IMAP) is the
+// final word, relayed back to the client as a human-approved EmailDraft, plus
+// a real OutreachMeeting request so the owner personally closes the deal —
+// see src/lib/business-development/rate-negotiation.ts.
+model RateNegotiation {
+  id             String @id @default(cuid())
+  organizationId String
+  companyId      String
+  contactId      String
+  replyId        String @unique
+
+  // Real excerpt of the client's own reply that triggered this — never
+  // paraphrased into something the client didn't actually say.
+  clientMessage String @db.Text
+  // What real, already-persisted context (LeadOpportunity/CompanyIntelligence/
+  // CompanyEvidence) the AI recommendation below was actually grounded in —
+  // an honest "no real scope information yet" when there isn't any, never
+  // invented project detail.
+  scopeSummary  String @db.Text
+  // In INR. Null when there's genuinely not enough real scope context to
+  // recommend anything beyond KVL's own floor (see kvl-service-catalog.ts) —
+  // never a guessed number standing in for real analysis.
+  recommendedRateINR     Int?
+  recommendationReasoning String @db.Text
+
+  status           RateNegotiationStatus @default(AWAITING_OWNER)
+  ownerEmailSentAt DateTime?
+  // Real, unedited body text of the owner's own reply email — the actual
+  // final word on rate, never AI-paraphrased.
+  ownerReplyContent  String?   @db.Text
+  ownerRespondedAt   DateTime?
+  clientReplyDraftId String?
+  outreachMeetingId  String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company      Company      @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  reply        Reply        @relation(fields: [replyId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+  @@index([companyId])
 }
 
 // Named OutreachMeeting (not Meeting) — the AI Executive Board's internal

@@ -34,6 +34,10 @@ import { CompanyMap } from "../_components/company-map";
 import { CrmActionsPanel } from "../_components/crm-actions-panel";
 import { CompanyEvidencePanel } from "../_components/company-evidence-panel";
 import { CompanyDiscoveryPanel } from "../_components/company-discovery-panel";
+import { CompanyConversationsPanel, type ConversationThreadView } from "../_components/company-conversations-panel";
+import { getCompanyCompleteTimeline } from "@/lib/business-development/company-complete-timeline";
+import { summarizeCompanyConversation } from "@/lib/business-development/company-conversation-summary";
+import { suggestNextActionForCompany } from "@/lib/business-development/company-next-action";
 
 export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -71,29 +75,52 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
     notFound();
   }
 
-  const [watchlists, members, referralPartners] = await Promise.all([
-    prisma.watchlist.findMany({
-      where: { organizationId: membership.organizationId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    }),
-    prisma.membership.findMany({
-      where: { organizationId: membership.organizationId, status: "ACTIVE" },
-      select: { user: { select: { id: true, name: true } } },
-      orderBy: { createdAt: "asc" },
-    }),
-    // Only ACTIVE partners are offered for a NEW attribution (a CANDIDATE
-    // hasn't been confirmed as a real relationship yet) — see
-    // resolveReferralPartnerId's doc comment in companies/actions.ts. The
-    // company's own currently-set partner is always included too (even if
-    // since deactivated) via `company.referralPartner` below, so an existing
-    // attribution is never silently hidden or dropped by re-saving the form.
-    prisma.referralPartner.findMany({
-      where: { organizationId: membership.organizationId, status: "ACTIVE" },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true },
-    }),
-  ]);
+  const [watchlists, members, referralPartners, conversationContacts, completeTimeline, conversationSummary, nextAction] =
+    await Promise.all([
+      prisma.watchlist.findMany({
+        where: { organizationId: membership.organizationId },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true },
+      }),
+      prisma.membership.findMany({
+        where: { organizationId: membership.organizationId, status: "ACTIVE" },
+        select: { user: { select: { id: true, name: true } } },
+        orderBy: { createdAt: "asc" },
+      }),
+      // Only ACTIVE partners are offered for a NEW attribution (a CANDIDATE
+      // hasn't been confirmed as a real relationship yet) — see
+      // resolveReferralPartnerId's doc comment in companies/actions.ts. The
+      // company's own currently-set partner is always included too (even if
+      // since deactivated) via `company.referralPartner` below, so an existing
+      // attribution is never silently hidden or dropped by re-saving the form.
+      prisma.referralPartner.findMany({
+        where: { organizationId: membership.organizationId, status: "ACTIVE" },
+        orderBy: { name: "asc" },
+        select: { id: true, name: true },
+      }),
+      // Phase 3 Email + Complete Client Conversation Center — this
+      // company's real per-contact email/reply activity, used below to
+      // compute the "Email & Conversations" stats and the per-contact
+      // conversation list. Never a second source of truth for anything
+      // sibling agents own (outreach/inbox.ts) — just a read of the same
+      // real EmailDraft/Reply rows, scoped to this company's contacts.
+      prisma.contact.findMany({
+        where: { companyId: id, organizationId: membership.organizationId },
+        select: {
+          id: true,
+          firstName: true,
+          lastName: true,
+          email: true,
+          emailDrafts: {
+            select: { id: true, subject: true, sentAt: true, createdAt: true, firstOpenedAt: true, firstClickedAt: true },
+          },
+          replies: { select: { id: true, receivedAt: true } },
+        },
+      }),
+      getCompanyCompleteTimeline(membership.organizationId, id),
+      summarizeCompanyConversation(membership.organizationId, id),
+      suggestNextActionForCompany(membership.organizationId, id),
+    ]);
 
   const canDelete = membership.role === "OWNER" || membership.role === "ADMIN";
   // If the company's currently-set partner isn't (or is no longer) ACTIVE,
@@ -118,6 +145,77 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
         technologies: latestScanRow.technologies,
       }
     : null;
+
+  // ===== Email & Conversations stats + per-contact thread list (real
+  // EmailDraft/Reply data for this company's contacts only) =====
+  let totalEmails = 0;
+  let sentCount = 0;
+  let openedCount = 0;
+  let clickedCount = 0;
+  let receivedCount = 0;
+  let lastContactAt: Date | null = null;
+  let lastReplyAt: Date | null = null;
+  const conversationThreads: ConversationThreadView[] = [];
+
+  for (const contact of conversationContacts) {
+    totalEmails += contact.emailDrafts.length;
+    receivedCount += contact.replies.length;
+
+    let contactLastActivity: Date | null = null;
+    let contactLastSubject: string | null = null;
+
+    for (const draft of contact.emailDrafts) {
+      if (draft.sentAt) {
+        sentCount += 1;
+        if (!lastContactAt || draft.sentAt > lastContactAt) lastContactAt = draft.sentAt;
+        if (!contactLastActivity || draft.sentAt > contactLastActivity) {
+          contactLastActivity = draft.sentAt;
+          contactLastSubject = draft.subject;
+        }
+      } else if (!contactLastActivity || draft.createdAt > contactLastActivity) {
+        contactLastActivity = draft.createdAt;
+        contactLastSubject = draft.subject;
+      }
+      if (draft.firstOpenedAt) openedCount += 1;
+      if (draft.firstClickedAt) clickedCount += 1;
+    }
+
+    for (const reply of contact.replies) {
+      if (!lastReplyAt || reply.receivedAt > lastReplyAt) lastReplyAt = reply.receivedAt;
+      if (!contactLastActivity || reply.receivedAt > contactLastActivity) contactLastActivity = reply.receivedAt;
+    }
+
+    if (contactLastActivity) {
+      conversationThreads.push({
+        contactId: contact.id,
+        contactName: [contact.firstName, contact.lastName].filter(Boolean).join(" ") || contact.email,
+        contactEmail: contact.email,
+        lastActivityAt: contactLastActivity.toISOString(),
+        emailCount: contact.emailDrafts.length,
+        replyCount: contact.replies.length,
+        lastSubject: contactLastSubject,
+      });
+    }
+  }
+  conversationThreads.sort((a, b) => new Date(b.lastActivityAt).getTime() - new Date(a.lastActivityAt).getTime());
+
+  const emailStats = {
+    totalEmails,
+    sent: sentCount,
+    received: receivedCount,
+    lastContactAt: lastContactAt ? (lastContactAt as Date).toISOString() : null,
+    lastReplyAt: lastReplyAt ? (lastReplyAt as Date).toISOString() : null,
+    // Never divide by zero into a fabricated 0% — no sent emails means no
+    // real denominator to compute a rate from.
+    openRate: sentCount > 0 ? Math.round((openedCount / sentCount) * 100) : null,
+    clickRate: sentCount > 0 ? Math.round((clickedCount / sentCount) * 100) : null,
+    replyRate: sentCount > 0 ? Math.round((receivedCount / sentCount) * 100) : null,
+  };
+
+  const completeTimelineView = completeTimeline.map((entry) => ({
+    ...entry,
+    occurredAt: entry.occurredAt.toISOString(),
+  }));
 
   return (
     <main className="py-8">
@@ -168,6 +266,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
             <TabsTrigger value="discovery">Discovery &amp; Evidence</TabsTrigger>
+            <TabsTrigger value="conversations">Conversations ({emailStats.totalEmails + emailStats.received})</TabsTrigger>
             <TabsTrigger value="timeline">Timeline ({company.timelineEvents.length})</TabsTrigger>
           </TabsList>
 
@@ -552,6 +651,17 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                 evidence={company.evidence.map((e) => ({ ...e, discoveredAt: e.discoveredAt.toISOString() }))}
               />
             </div>
+          </TabsContent>
+
+          <TabsContent value="conversations">
+            <CompanyConversationsPanel
+              companyId={company.id}
+              stats={emailStats}
+              threads={conversationThreads}
+              timeline={completeTimelineView}
+              summary={conversationSummary}
+              nextAction={nextAction}
+            />
           </TabsContent>
 
           <TabsContent value="timeline">
