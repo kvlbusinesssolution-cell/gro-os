@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Users, Mail, Globe } from "lucide-react";
+import { Users, Mail, Globe, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,21 +30,33 @@ const STATUS_VARIANT: Record<string, "outline" | "accent" | "default" | "seconda
   UNSUBSCRIBED: "outline",
 };
 
-export default async function OutreachContactsPage() {
-  const { membership } = await requireActiveMembership("/dashboard/outreach/contacts");
+// Phase 25 (pagination fix — this page previously did an unbounded
+// findMany, confirmed a real bug by the phase audit): same pattern as
+// /dashboard/companies (Phase 24).
+const PAGE_SIZE = 60;
 
-  const contacts = await prisma.contact.findMany({
-    where: { organizationId: membership.organizationId },
-    orderBy: { createdAt: "desc" },
-    include: {
-      company: {
-        include: {
-          leadScore: true,
-          websiteScans: { orderBy: { createdAt: "desc" }, take: 1, include: { opportunity: true } },
+export default async function OutreachContactsPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const { membership } = await requireActiveMembership("/dashboard/outreach/contacts");
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, Number.parseInt(pageParam ?? "1", 10) || 1);
+
+  const [contacts, totalContacts] = await Promise.all([
+    prisma.contact.findMany({
+      where: { organizationId: membership.organizationId },
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
+      include: {
+        company: {
+          include: {
+            leadScore: true,
+            websiteScans: { orderBy: { createdAt: "desc" }, take: 1, include: { opportunity: true } },
+          },
         },
       },
-    },
-  });
+    }),
+    prisma.contact.count({ where: { organizationId: membership.organizationId } }),
+  ]);
 
   return (
     <main className="py-8">
@@ -126,6 +138,34 @@ export default async function OutreachContactsPage() {
                 </Link>
               );
             })}
+          </div>
+        )}
+
+        {totalContacts > PAGE_SIZE && (
+          <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+            <p>
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalContacts)} of {totalContacts} contacts
+            </p>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/dashboard/outreach/contacts?page=${page - 1}`}
+                aria-disabled={page <= 1}
+                className={`flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 font-medium text-foreground transition-colors ${
+                  page <= 1 ? "pointer-events-none opacity-40" : "hover:bg-accent"
+                }`}
+              >
+                <ChevronLeft className="size-3.5" /> Previous
+              </Link>
+              <Link
+                href={`/dashboard/outreach/contacts?page=${page + 1}`}
+                aria-disabled={page * PAGE_SIZE >= totalContacts}
+                className={`flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 font-medium text-foreground transition-colors ${
+                  page * PAGE_SIZE >= totalContacts ? "pointer-events-none opacity-40" : "hover:bg-accent"
+                }`}
+              >
+                Next <ChevronRight className="size-3.5" />
+              </Link>
+            </div>
           </div>
         )}
       </Container>

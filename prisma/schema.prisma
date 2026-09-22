@@ -5101,6 +5101,26 @@ enum ContactVerificationStatus {
   UNVERIFIED
   INVALID
   RISKY
+  // Phase 25 (verification states): a value that was once VERIFIED/RISKY
+  // but has aged past a real freshness threshold — see
+  // contact-freshness.ts. Never applied to UNKNOWN/UNVERIFIED (nothing to
+  // go stale).
+  STALE
+}
+
+// Phase 25 (requirement: decision-maker classification) — real buying-
+// influence role, distinct from DecisionMakerRole (a job-title taxonomy).
+// Deterministically derived from job-title/seniority signals
+// (contact-classification.ts) — never AI-guessed. UNKNOWN is the honest
+// default when signals are genuinely ambiguous.
+enum ContactBuyerRole {
+  ECONOMIC_BUYER
+  TECHNICAL_BUYER
+  BUSINESS_BUYER
+  INFLUENCER
+  CHAMPION
+  EXECUTIVE
+  UNKNOWN
 }
 
 enum DraftChannel {
@@ -5249,6 +5269,27 @@ model Contact {
   emailVerificationStatus ContactVerificationStatus @default(UNKNOWN)
   phoneVerificationStatus ContactVerificationStatus @default(UNKNOWN)
 
+  // Phase 25 (job-title/seniority normalization) — the real, deterministic
+  // label from estimateSeniority() (enrichment.ts), stored in its own
+  // field. Previously this value was incorrectly written into `department`
+  // as a fallback (a real bug, fixed this phase) — a contact with no real
+  // department must stay department: null, never "VP".
+  seniority String?
+  // Phase 25 (decision-maker classification) — real buying-influence role,
+  // deterministically derived, distinct from DecisionMaker.role (a
+  // job-title taxonomy on the separate DecisionMaker model).
+  buyerRole ContactBuyerRole @default(UNKNOWN)
+
+  // Phase 25 (requirement #4, contact merge safety) — same real soft-merge
+  // pattern as Company (Phase 24): the merge-away Contact row is never
+  // deleted, only flagged, and excluded from findOrCreateContact matching
+  // going forward (mergedIntoId: null filter) — full history stays
+  // reachable via the `mergedInto` relation.
+  mergedIntoId String?
+  mergedAt     DateTime?
+  mergedInto   Contact?  @relation("ContactMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom   Contact[] @relation("ContactMerge")
+
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
   owner         User?          @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
@@ -5268,12 +5309,36 @@ model Contact {
   whatsappConversations    WhatsAppConversation[]
   calls                    Call[]
   voiceConsent             VoiceConsent?
+  evidence                 ContactEvidence[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([organizationId, email])
   @@index([organizationId])
   @@index([decisionMakerId])
+  @@index([mergedIntoId])
+}
+
+// Phase 25 (requirement: evidence per field) — mirrors CompanyEvidence
+// exactly (Phase 24), same immutable/append-only discipline, same
+// fieldName/verificationStatus/source/confidence shape.
+model ContactEvidence {
+  id                 String                      @id @default(cuid())
+  contactId          String
+  kind               EvidenceKind
+  fact               String                      @db.Text
+  source             EvidenceSource
+  sourceUrl          String?
+  confidence         Float
+  discoveredAt       DateTime                    @default(now())
+  fieldName          String?
+  verificationStatus EvidenceVerificationStatus  @default(UNVERIFIED)
+
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@index([contactId])
+  @@index([contactId, fieldName])
 }
 
 model Campaign {

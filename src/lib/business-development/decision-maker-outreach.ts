@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { isAIConnected } from "@/lib/ai/client";
 import { generateText, generateStructured } from "@/lib/ai/fallback";
 import { recordAIUsage } from "@/lib/billing/ai-credits";
+import { findOrCreateContact } from "./dedup";
 import type { DecisionMakerRole } from "@/generated/prisma/client";
 
 /**
@@ -129,15 +130,15 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
       );
 
       if (extraction.parsed.email) {
-        const contact = await prisma.contact.create({
-          data: {
-            organizationId: company.organizationId,
-            companyId: company.id,
-            firstName,
-            lastName,
-            email: extraction.parsed.email,
-            jobTitle,
-          },
+        // Phase 25 (dedup-bypass fix): routed through the real single
+        // choke point instead of a direct prisma.contact.create().
+        const { contact } = await findOrCreateContact({
+          organizationId: company.organizationId,
+          companyId: company.id,
+          firstName,
+          lastName,
+          email: extraction.parsed.email,
+          jobTitle,
         });
 
         // Log the found email as auditable CompanyEvidence — "why do we
@@ -165,17 +166,19 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
   }
 
   // 3. Fall back to the company's own general email, honestly labeled.
+  // Phase 25 (dedup-bypass fix): routed through the real single choke
+  // point — multiple decision-makers at the same company with no real
+  // personal email now correctly share one Contact row for the shared
+  // inbox, instead of each creating a real duplicate.
   if (company.email) {
-    const contact = await prisma.contact.create({
-      data: {
-        organizationId: company.organizationId,
-        companyId: company.id,
-        firstName,
-        lastName,
-        email: company.email,
-        jobTitle,
-        notes: `General company contact — personal email not publicly available for ${decisionMaker.name}.`,
-      },
+    const { contact } = await findOrCreateContact({
+      organizationId: company.organizationId,
+      companyId: company.id,
+      firstName,
+      lastName,
+      email: company.email,
+      jobTitle,
+      notes: `General company contact — personal email not publicly available for ${decisionMaker.name}.`,
     });
     return { contactId: contact.id, created: true, emailSource: "company_fallback" };
   }

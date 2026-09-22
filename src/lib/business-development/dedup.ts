@@ -1,7 +1,24 @@
 import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { classifyBuyerRole } from "./contact-classification";
 import type { Company, CompanySource, CompanyStatus, Contact } from "@/generated/prisma/client";
+
+/**
+ * Phase 25 (invalid email test scenario) — real, cheap, deterministic
+ * RFC-5322-shape check (not a deliverability/SMTP check, which needs a
+ * real provider this codebase doesn't have — see the phase report).
+ * Format validity IS a real fact; a malformed string genuinely can be
+ * marked INVALID without fabricating anything. Never used to mark
+ * VERIFIED — only ever narrows UNKNOWN down to INVALID for a clear
+ * malformed case, everything else (a well-formed but unconfirmed address)
+ * stays UNKNOWN.
+ */
+const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export function isValidEmailShape(email: string): boolean {
+  return EMAIL_SHAPE_RE.test(email.trim());
+}
 
 /**
  * Strips protocol/www/path down to a bare lowercase hostname — the real,
@@ -208,6 +225,15 @@ export interface FindOrCreateContactInput {
   phone?: string | null;
   country?: string | null;
   city?: string | null;
+  // Optional extra fields — every caller that doesn't supply these keeps
+  // the same behavior as before (null/empty), matching every prior
+  // findOrCreateContact call site.
+  tags?: string[];
+  status?: Contact["status"];
+  notes?: string | null;
+  linkedin?: string | null;
+  department?: string | null;
+  relationshipScore?: number | null;
 }
 
 export interface FindOrCreateContactResult {
@@ -221,40 +247,93 @@ export interface FindOrCreateContactResult {
  * case-insensitive email within the organization ONLY (an email is the one
  * genuinely reliable real-world identity signal for a person — unlike a
  * company name, a person's display name is far too ambiguous to match on).
- * A match fills in `companyId` when the caller supplies one and the
- * existing row doesn't already have one (closes a real gap without
- * overwriting an existing, possibly more-correct, company link) — this is
- * the real "contact/company relationship" duplicate-prevention path Phase 1
- * asked for: re-discovering the same person at the company they're already
- * linked to never creates a second Contact row.
+ *
+ * Phase 25 fixes:
+ * - Job change: when a match already has a DIFFERENT real companyId than
+ *   the one supplied, it is now genuinely updated (previously only ever
+ *   filled in when empty — a returning contact who changed jobs kept their
+ *   stale old-company link forever).
+ * - Retry safety: backed by the real @@unique([organizationId, email])
+ *   constraint (Phase 25) — a concurrent/retried call that loses the
+ *   check-then-create race gets a real P2002, caught below and re-read,
+ *   matching findOrCreateCompany's exact pattern.
+ * - Merge-aware lookup: unlike Company (whose dedup key, `domain`, is
+ *   nullable, so a merged-away row can be cleared and excluded), Contact's
+ *   dedup key (`email`) is required and permanently unique per org — a
+ *   merged-away Contact's email can never be freed up for a fresh row. So
+ *   a match on a merged-away row transparently follows `mergedIntoId` to
+ *   the real, live keeper and returns that instead (see contact-merge.ts)
+ *   — never a constraint-violation error, never a silent duplicate.
+ * - Invalid-email format detection: a genuinely malformed email sets
+ *   `emailVerificationStatus: INVALID` at creation — never VERIFIED, only
+ *   ever narrows UNKNOWN to INVALID for a clear format failure (see
+ *   isValidEmailShape's own doc comment — no real deliverability provider
+ *   exists in this codebase, disclosed honestly rather than faked).
+ * - Buyer-role classification: a real, deterministic classification from
+ *   jobTitle (contact-classification.ts) is set at creation.
  */
 export async function findOrCreateContact(input: FindOrCreateContactInput): Promise<FindOrCreateContactResult> {
   const email = input.email.trim().toLowerCase();
 
-  const existing = await prisma.contact.findFirst({
+  let existing = await prisma.contact.findFirst({
     where: { organizationId: input.organizationId, email: { equals: email, mode: "insensitive" } },
   });
 
+  // A match on a merged-away row resolves to its real, live keeper —
+  // email uniqueness means the merged-away row's email can never be
+  // reused for a genuinely fresh contact (see this function's own doc
+  // comment above).
+  if (existing?.mergedIntoId) {
+    existing = await prisma.contact.findUnique({ where: { id: existing.mergedIntoId } });
+  }
+
   if (existing) {
-    const contact =
-      !existing.companyId && input.companyId
+    const companyChanged = !!input.companyId && input.companyId !== existing.companyId;
+    const contact = companyChanged
+      ? await prisma.contact.update({ where: { id: existing.id }, data: { companyId: input.companyId } })
+      : !existing.companyId && input.companyId
         ? await prisma.contact.update({ where: { id: existing.id }, data: { companyId: input.companyId } })
         : existing;
     return { contact, wasCreated: false };
   }
 
-  const contact = await prisma.contact.create({
-    data: {
-      organizationId: input.organizationId,
-      companyId: input.companyId || null,
-      firstName: input.firstName,
-      lastName: input.lastName || null,
-      email,
-      jobTitle: input.jobTitle || null,
-      phone: input.phone || null,
-      country: input.country || null,
-      city: input.city || null,
-    },
-  });
-  return { contact, wasCreated: true };
+  const emailStatus = isValidEmailShape(email) ? undefined : ("INVALID" as const);
+
+  const createData = {
+    organizationId: input.organizationId,
+    companyId: input.companyId || null,
+    firstName: input.firstName,
+    lastName: input.lastName || null,
+    email,
+    jobTitle: input.jobTitle || null,
+    phone: input.phone || null,
+    country: input.country || null,
+    city: input.city || null,
+    tags: input.tags ?? [],
+    status: input.status,
+    notes: input.notes || null,
+    linkedin: input.linkedin || null,
+    department: input.department || null,
+    relationshipScore: input.relationshipScore ?? null,
+    buyerRole: classifyBuyerRole(input.jobTitle),
+    ...(emailStatus ? { emailVerificationStatus: emailStatus } : {}),
+  };
+
+  try {
+    const contact = await prisma.contact.create({ data: createData });
+    return { contact, wasCreated: true };
+  } catch (error) {
+    // Phase 25 (retry safety) — same real P2002-catch-and-reread pattern as
+    // findOrCreateCompany.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      let winner = await prisma.contact.findFirst({
+        where: { organizationId: input.organizationId, email: { equals: email, mode: "insensitive" } },
+      });
+      if (winner?.mergedIntoId) {
+        winner = await prisma.contact.findUnique({ where: { id: winner.mergedIntoId } });
+      }
+      if (winner) return { contact: winner, wasCreated: false };
+    }
+    throw error;
+  }
 }

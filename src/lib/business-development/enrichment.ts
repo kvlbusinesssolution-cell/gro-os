@@ -7,6 +7,7 @@ import { scoreCompany } from "@/lib/lead-scoring";
 import { syncCompanyTechnologiesFromScan } from "@/lib/scanner/technology-evidence-sync";
 
 import { normalizeWebsiteHost } from "./dedup";
+import { classifyBuyerRole } from "./contact-classification";
 import { computeIntentScore } from "./intent-scoring";
 import { discoverDecisionMakers } from "./decision-maker-discovery";
 import { generateLeadOpportunities } from "./opportunity-engine";
@@ -342,10 +343,13 @@ export async function enrichContact(contactId: string, options: EnrichContactOpt
       decisionMakerId: matched ? matched.id : contact.decisionMakerId,
       enrichmentStatus: "COMPLETED",
       lastEnrichedAt: new Date(),
-      // `department` is user-editable and already real — only fill it from
-      // the seniority heuristic when the contact has none at all, never
-      // overwrite a human-entered value.
-      department: contact.department ?? seniority,
+      // Phase 25 fix: seniority now has its own real field — it must NEVER
+      // be written into `department` (a real bug this session: a contact
+      // with no real department ended up with department: "VP", which is
+      // not a department). `department` itself is never touched by
+      // enrichment now — it stays genuinely user-editable/empty.
+      seniority: contact.seniority ?? seniority,
+      buyerRole: classifyBuyerRole(contact.jobTitle),
     },
   });
 

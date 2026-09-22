@@ -6,11 +6,15 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { contactSchema, type ContactInput, type ContactStatusInput } from "@/lib/validations/outreach";
+import { findOrCreateContact } from "@/lib/business-development/dedup";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
 }
+
+// Phase 25 (RBAC): same OWNER/ADMIN bar as Company edit/delete (Phase 24).
+const EDITOR_ROLES = new Set(["OWNER", "ADMIN"]);
 
 async function resolveActiveMembership(userId: string) {
   return prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
@@ -42,27 +46,31 @@ export async function createContact(input: ContactInput): Promise<CreateContactR
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
 
   try {
-    const contact = await prisma.contact.create({
-      data: {
-        organizationId: membership.organizationId,
-        companyId: parsed.data.companyId || null,
-        firstName: parsed.data.firstName,
-        lastName: parsed.data.lastName || null,
-        email: parsed.data.email,
-        jobTitle: parsed.data.jobTitle || null,
-        phone: parsed.data.phone || null,
-        country: parsed.data.country || null,
-        city: parsed.data.city || null,
-        tags: parsed.data.tags ?? [],
-        status: parsed.data.status,
-        notes: parsed.data.notes || null,
-        linkedin: parsed.data.linkedin || null,
-        department: parsed.data.department || null,
-        relationshipScore: parsed.data.relationshipScore ?? null,
-      },
+    // Phase 25 (dedup-bypass fix): routed through the real single choke
+    // point instead of a direct prisma.contact.create() — re-adding a
+    // contact whose email already exists in this org now reuses/updates
+    // that row instead of creating a real duplicate.
+    const { contact, wasCreated } = await findOrCreateContact({
+      organizationId: membership.organizationId,
+      companyId: parsed.data.companyId || null,
+      firstName: parsed.data.firstName,
+      lastName: parsed.data.lastName || null,
+      email: parsed.data.email,
+      jobTitle: parsed.data.jobTitle || null,
+      phone: parsed.data.phone || null,
+      country: parsed.data.country || null,
+      city: parsed.data.city || null,
+      tags: parsed.data.tags ?? [],
+      status: parsed.data.status,
+      notes: parsed.data.notes || null,
+      linkedin: parsed.data.linkedin || null,
+      department: parsed.data.department || null,
+      relationshipScore: parsed.data.relationshipScore ?? null,
     });
 
-    await logAudit({ userId, organizationId: membership.organizationId, action: "outreach.contact_created", metadata: { contactId: contact.id } });
+    if (wasCreated) {
+      await logAudit({ userId, organizationId: membership.organizationId, action: "outreach.contact_created", metadata: { contactId: contact.id } });
+    }
     revalidatePath("/dashboard/outreach/contacts");
     revalidatePath("/dashboard/crm/contacts");
     return { ok: true, contactId: contact.id };
@@ -84,6 +92,9 @@ export async function updateContact(contactId: string, input: ContactInput): Pro
 
   const resolved = await resolveContactInOrg(userId, contactId);
   if (!resolved) return { ok: false, error: "Contact not found." };
+  if (!EDITOR_ROLES.has(resolved.membership.role)) {
+    return { ok: false, error: "Only an Owner or Admin can edit a contact." };
+  }
 
   try {
     await prisma.contact.update({
@@ -124,6 +135,9 @@ export async function deleteContact(contactId: string): Promise<ActionResult> {
 
   const resolved = await resolveContactInOrg(userId, contactId);
   if (!resolved) return { ok: false, error: "Contact not found." };
+  if (!EDITOR_ROLES.has(resolved.membership.role)) {
+    return { ok: false, error: "Only an Owner or Admin can delete a contact." };
+  }
 
   await prisma.contact.delete({ where: { id: contactId } });
   await logAudit({ userId, organizationId: resolved.membership.organizationId, action: "outreach.contact_deleted", metadata: { contactId } });
@@ -210,22 +224,22 @@ export async function createContactFromCompany(
   if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message ?? "Please check the contact details." };
 
   try {
-    const contact = await prisma.contact.create({
-      data: {
-        organizationId: membership.organizationId,
-        companyId,
-        firstName: parsed.data.firstName,
-        lastName: parsed.data.lastName || null,
-        email: parsed.data.email,
-        jobTitle: parsed.data.jobTitle || null,
-        country: parsed.data.country || null,
-        city: parsed.data.city || null,
-        tags: [],
-        status: "NEW",
-      },
+    // Phase 25 (dedup-bypass fix): routed through the real single choke
+    // point instead of a direct prisma.contact.create().
+    const { contact, wasCreated } = await findOrCreateContact({
+      organizationId: membership.organizationId,
+      companyId,
+      firstName: parsed.data.firstName,
+      lastName: parsed.data.lastName || null,
+      email: parsed.data.email,
+      jobTitle: parsed.data.jobTitle || null,
+      country: parsed.data.country || null,
+      city: parsed.data.city || null,
     });
 
-    await logAudit({ userId, organizationId: membership.organizationId, action: "outreach.contact_created_from_company", metadata: { contactId: contact.id, companyId } });
+    if (wasCreated) {
+      await logAudit({ userId, organizationId: membership.organizationId, action: "outreach.contact_created_from_company", metadata: { contactId: contact.id, companyId } });
+    }
     revalidatePath("/dashboard/outreach/contacts");
     revalidatePath(`/dashboard/companies/${companyId}`);
     return { ok: true, contactId: contact.id };
