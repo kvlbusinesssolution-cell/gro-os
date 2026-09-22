@@ -673,3 +673,38 @@ export async function evaluatePipelineConcentrationRisk(organizationId: string):
     },
   ];
 }
+
+const INTENT_SURGE_THRESHOLD = 70;
+
+/**
+ * Phase 16 (Advanced Enrichment + Buying Intent Intelligence) — a real,
+ * already-computed IntentScore (src/lib/business-development/
+ * intent-scoring.ts) is currently in the HIGH band for this org. Reuses
+ * the existing score/signals verbatim — never recomputes or reinterprets
+ * intent here, and never fires on an AI guess: `reasoning` and `signals`
+ * were already grounded in real evidence by computeIntentScore.
+ *
+ * Deliberately does not try to detect "just crossed" itself — the engine's
+ * own dedup (a real Alert row per [organizationId, type, relatedEntityId],
+ * reactivated rather than re-notified while still ACTIVE) already gives
+ * "notify once per crossing, self-resolve when intent drops" for free, the
+ * same pattern every other rule in this file relies on.
+ */
+export async function evaluateIntentSurge(organizationId: string): Promise<AlertRuleResult[]> {
+  const highIntentCompanies = await prisma.intentScore.findMany({
+    where: { band: "HIGH", company: { organizationId } },
+    include: { company: { select: { id: true, name: true } } },
+    orderBy: { score: "desc" },
+  });
+
+  return highIntentCompanies.map((intent) => ({
+    relatedEntityType: "Company",
+    relatedEntityId: intent.company.id,
+    title: `High buying intent: ${intent.company.name}`,
+    message: intent.reasoning,
+    formula: `Real IntentScore (score ${intent.score}, band HIGH) from ${(intent.signals as unknown[]).length} evidence-backed signal(s) — see src/lib/business-development/intent-scoring.ts`,
+    metricValue: intent.score,
+    thresholdValue: INTENT_SURGE_THRESHOLD,
+    severity: "HIGH" as RiskLevel,
+  }));
+}

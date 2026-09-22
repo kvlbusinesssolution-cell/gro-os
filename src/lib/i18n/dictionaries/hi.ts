@@ -5,6 +5,7 @@ export const hi: Dictionary = {
   "nav.aiCommandCenter": "एआई कमांड सेंटर",
   "nav.board": "एआई एग्जीक्यूटिव बोर्ड",
   "nav.companies": "कंपनियां",
+  "nav.career": "करियर",
   "nav.companyDiscovery": "कंपनी खोज",
   "nav.opportunities": "एआई अवसर",
   "nav.priorityQueue": "एआई प्राथमिकता कतार",

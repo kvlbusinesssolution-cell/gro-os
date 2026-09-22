@@ -17,8 +17,9 @@ import {
   classifyCompanyBuckets,
   type DiscoveryBucket,
 } from "@/lib/business-development/discovery-buckets";
+import { buildCompanyDiscoveryWhere, parseNumberParam, toStringArray } from "@/lib/business-development/company-discovery-filters";
 import { DiscoveryBucketBadge } from "./_components/discovery-bucket-badge";
-import type { CompanySource, Prisma } from "@/generated/prisma/client";
+import type { CompanySource } from "@/generated/prisma/client";
 
 const SOURCE_OPTIONS: CompanySource[] = ["MANUAL", "LEAD_FINDER", "CLIENT_FINDER", "WEBSITE_SCANNER", "AUTO_DISCOVERY"];
 
@@ -39,10 +40,18 @@ function timeAgo(date: Date, now: Date): string {
 
 interface DiscoveryPageSearchParams {
   status?: string;
-  country?: string;
-  industry?: string;
+  country?: string | string[];
+  industry?: string | string[];
   source?: string;
   technology?: string;
+  technologyMode?: string;
+  employeeMin?: string;
+  employeeMax?: string;
+  revenueMin?: string;
+  revenueMax?: string;
+  fundingStage?: string;
+  state?: string;
+  city?: string;
   from?: string;
   to?: string;
 }
@@ -58,31 +67,47 @@ export default async function CompanyDiscoveryPage({
   const now = new Date();
 
   const statusFilter = isDiscoveryBucket(params.status) ? params.status : undefined;
-  const country = params.country?.trim() || undefined;
-  const industry = params.industry?.trim() || undefined;
+  const countries = toStringArray(params.country);
+  const industries = toStringArray(params.industry);
   const source = params.source?.trim() || undefined;
   const technology = params.technology?.trim() || undefined;
+  const technologyMode = params.technologyMode === "exclude" ? "exclude" : "include";
+  const employeeMin = parseNumberParam(params.employeeMin);
+  const employeeMax = parseNumberParam(params.employeeMax);
+  const revenueMin = parseNumberParam(params.revenueMin);
+  const revenueMax = parseNumberParam(params.revenueMax);
+  const fundingStage = params.fundingStage?.trim() || undefined;
+  const state = params.state?.trim() || undefined;
+  const city = params.city?.trim() || undefined;
   const from = params.from?.trim() || undefined;
   const to = params.to?.trim() || undefined;
+  const fromDate = from ? new Date(from) : undefined;
+  const toDate = to ? new Date(`${to}T23:59:59.999Z`) : undefined;
 
-  const conditions: Prisma.CompanyWhereInput[] = [{ organizationId }];
-  if (statusFilter) conditions.push(buildDiscoveryBucketWhere(statusFilter, now));
-  if (country) conditions.push({ headquartersCountry: country });
-  if (industry) conditions.push({ industry });
-  if (source) conditions.push({ OR: [{ source: source as CompanySource }, { discoverySources: { has: source } }] });
-  if (technology) conditions.push({ technologies: { has: technology } });
-  if (from) {
-    const fromDate = new Date(from);
-    if (!Number.isNaN(fromDate.getTime())) conditions.push({ lastDiscoveredAt: { gte: fromDate } });
-  }
-  if (to) {
-    const toDate = new Date(`${to}T23:59:59.999Z`);
-    if (!Number.isNaN(toDate.getTime())) conditions.push({ lastDiscoveredAt: { lte: toDate } });
-  }
+  const where = buildCompanyDiscoveryWhere(
+    organizationId,
+    {
+      statusFilter,
+      countries,
+      industries,
+      source,
+      technology,
+      technologyMode,
+      employeeMin,
+      employeeMax,
+      revenueMin,
+      revenueMax,
+      fundingStage,
+      state,
+      city,
+      from: fromDate && !Number.isNaN(fromDate.getTime()) ? fromDate : undefined,
+      to: toDate && !Number.isNaN(toDate.getTime()) ? toDate : undefined,
+    },
+    buildDiscoveryBucketWhere,
+    now,
+  );
 
-  const where: Prisma.CompanyWhereInput = { AND: conditions };
-
-  const [companies, countryRows, industryRows, bucketCounts] = await Promise.all([
+  const [companies, countryRows, industryRows, fundingStageRows, bucketCounts] = await Promise.all([
     prisma.company.findMany({
       where,
       orderBy: { lastDiscoveredAt: "desc" },
@@ -104,6 +129,12 @@ export default async function CompanyDiscoveryPage({
       distinct: ["industry"],
       orderBy: { industry: "asc" },
     }),
+    prisma.company.findMany({
+      where: { organizationId, fundingStage: { not: null } },
+      select: { fundingStage: true },
+      distinct: ["fundingStage"],
+      orderBy: { fundingStage: "asc" },
+    }),
     Promise.all(
       DISCOVERY_BUCKETS.map(async (bucket) => ({
         bucket,
@@ -115,13 +146,21 @@ export default async function CompanyDiscoveryPage({
   return (
     <main className="py-8">
       <Container className="flex flex-col gap-6">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Company Discovery</h1>
-          <p className="text-sm text-muted-foreground">
-            Every company your org has discovered — manually, via Lead/Client Finder, or the autonomous
-            discovery job — grouped by real research status straight off the database. Nothing here is
-            client-side-filtered from a fixed page; every filter below runs as a real query.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">AI Company Discovery</h1>
+            <p className="text-sm text-muted-foreground">
+              Every company your org has discovered — manually, via Lead/Client Finder, or the autonomous
+              discovery job — grouped by real research status straight off the database. Nothing here is
+              client-side-filtered from a fixed page; every filter below runs as a real query.
+            </p>
+          </div>
+          <Link
+            href="/dashboard/company-discovery/decision-makers"
+            className="flex h-10 shrink-0 items-center gap-1.5 rounded-lg border border-border px-3.5 text-sm font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            Search decision-makers
+          </Link>
         </div>
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -160,10 +199,9 @@ export default async function CompanyDiscoveryPage({
               </div>
               <div className="flex flex-col gap-1">
                 <label htmlFor="country" className="text-xs text-muted-foreground">
-                  Country
+                  Country <span className="text-[10px]">(Ctrl/Cmd-click for OR)</span>
                 </label>
-                <Select id="country" name="country" defaultValue={country ?? ""} className="w-44">
-                  <option value="">All countries</option>
+                <Select id="country" name="country" multiple defaultValue={countries} className="h-auto min-h-11 w-44">
                   {countryRows.map((c) => (
                     <option key={c.headquartersCountry} value={c.headquartersCountry!}>
                       {c.headquartersCountry}
@@ -173,10 +211,9 @@ export default async function CompanyDiscoveryPage({
               </div>
               <div className="flex flex-col gap-1">
                 <label htmlFor="industry" className="text-xs text-muted-foreground">
-                  Industry
+                  Industry <span className="text-[10px]">(Ctrl/Cmd-click for OR)</span>
                 </label>
-                <Select id="industry" name="industry" defaultValue={industry ?? ""} className="w-44">
-                  <option value="">All industries</option>
+                <Select id="industry" name="industry" multiple defaultValue={industries} className="h-auto min-h-11 w-44">
                   {industryRows.map((i) => (
                     <option key={i.industry} value={i.industry!}>
                       {i.industry}
@@ -201,7 +238,56 @@ export default async function CompanyDiscoveryPage({
                 <label htmlFor="technology" className="text-xs text-muted-foreground">
                   Technology
                 </label>
-                <Input id="technology" name="technology" defaultValue={technology ?? ""} placeholder="e.g. Shopify" className="w-40" />
+                <div className="flex items-center gap-1.5">
+                  <Input id="technology" name="technology" defaultValue={technology ?? ""} placeholder="e.g. Shopify" className="w-32" />
+                  <Select id="technologyMode" name="technologyMode" defaultValue={technologyMode} className="w-24" title="Include (has) or exclude (NOT) this technology">
+                    <option value="include">has</option>
+                    <option value="exclude">NOT</option>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="employeeMin" className="text-xs text-muted-foreground">
+                  Employees
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Input id="employeeMin" name="employeeMin" type="number" min="0" defaultValue={employeeMin ?? ""} placeholder="Min" className="w-20" />
+                  <Input id="employeeMax" name="employeeMax" type="number" min="0" defaultValue={employeeMax ?? ""} placeholder="Max" className="w-20" />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="revenueMin" className="text-xs text-muted-foreground">
+                  Revenue
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <Input id="revenueMin" name="revenueMin" type="number" min="0" defaultValue={revenueMin ?? ""} placeholder="Min" className="w-24" />
+                  <Input id="revenueMax" name="revenueMax" type="number" min="0" defaultValue={revenueMax ?? ""} placeholder="Max" className="w-24" />
+                </div>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="fundingStage" className="text-xs text-muted-foreground">
+                  Funding stage
+                </label>
+                <Select id="fundingStage" name="fundingStage" defaultValue={fundingStage ?? ""} className="w-40">
+                  <option value="">Any funding stage</option>
+                  {fundingStageRows.map((f) => (
+                    <option key={f.fundingStage} value={f.fundingStage!}>
+                      {f.fundingStage}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="state" className="text-xs text-muted-foreground">
+                  State
+                </label>
+                <Input id="state" name="state" defaultValue={state ?? ""} placeholder="e.g. Maharashtra" className="w-36" />
+              </div>
+              <div className="flex flex-col gap-1">
+                <label htmlFor="city" className="text-xs text-muted-foreground">
+                  City
+                </label>
+                <Input id="city" name="city" defaultValue={city ?? ""} placeholder="e.g. Pune" className="w-32" />
               </div>
               <div className="flex flex-col gap-1">
                 <label htmlFor="from" className="text-xs text-muted-foreground">

@@ -10,6 +10,7 @@ import { publishRealtimeEvent } from "@/lib/realtime/event-bus";
 import { enqueueSourceEmbedding } from "@/lib/rag/embedding-queue";
 import { buildAgentContext } from "@/lib/context-engine";
 import { recordAIUsage } from "@/lib/billing/ai-credits";
+import { withAgentRunTracing } from "@/lib/ai/agent-governance";
 import type { AIUsageProvider, MemorySourceKind, MemoryType } from "@/generated/prisma/client";
 
 /**
@@ -367,28 +368,57 @@ export async function runAgentTurn(params: {
         })
       : "";
 
-    const result = await generateText(
-      {
-        system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}".`,
-        userContent: [
-          memoryContext,
-          engineContext || null,
-          params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
-          `Your task now: ${params.task}`,
-        ]
-          .filter(Boolean)
-          .join("\n\n"),
-        maxTokens: 2048,
-        effort: params.effort ?? "medium",
-      },
-      // The only call site that queues a durable retry on total-chain
-      // failure — see fallback-queue.ts's doc comment for why: this is the
-      // one call whose return value (`content`) is the entire deliverable of
-      // the turn, so "retry later and mark the agent COMPLETED" is fully
-      // meaningful on its own, unlike the multi-step/structured call sites
-      // below.
-      { organizationId: params.organizationId, agentId: params.agentId, context: "agent-turn" },
-    );
+    const runOrganizationId = params.organizationId ?? (await prisma.aIAgentInstance.findUnique({ where: { id: params.agentId }, select: { organizationId: true } }))?.organizationId;
+
+    const result = await (runOrganizationId
+      ? withAgentRunTracing(
+          {
+            organizationId: runOrganizationId,
+            domain: "BUSINESS",
+            agentKey: `executive-agent-turn:${params.agentType}`,
+            inputSummary: params.task.slice(0, 500),
+          },
+          () =>
+            generateText(
+              {
+                system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}".`,
+                userContent: [
+                  memoryContext,
+                  engineContext || null,
+                  params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
+                  `Your task now: ${params.task}`,
+                ]
+                  .filter(Boolean)
+                  .join("\n\n"),
+                maxTokens: 2048,
+                effort: params.effort ?? "medium",
+              },
+              // The only call site that queues a durable retry on total-chain
+              // failure — see fallback-queue.ts's doc comment for why: this is the
+              // one call whose return value (`content`) is the entire deliverable of
+              // the turn, so "retry later and mark the agent COMPLETED" is fully
+              // meaningful on its own, unlike the multi-step/structured call sites
+              // below.
+              { organizationId: params.organizationId, agentId: params.agentId, context: "agent-turn" },
+            ),
+          (r) => ({ outputSummary: r.text.slice(0, 500) }),
+        )
+      : generateText(
+          {
+            system: `${persona.systemPrompt}\n\nYour name in this organization is "${params.agentName}".`,
+            userContent: [
+              memoryContext,
+              engineContext || null,
+              params.conversationContext ? `Conversation so far:\n${params.conversationContext}` : null,
+              `Your task now: ${params.task}`,
+            ]
+              .filter(Boolean)
+              .join("\n\n"),
+            maxTokens: 2048,
+            effort: params.effort ?? "medium",
+          },
+          { organizationId: params.organizationId, agentId: params.agentId, context: "agent-turn" },
+        ));
 
     await setAgentStatus(params.agentId, "COMPLETED");
     await recordAgentAIUsage(params.agentId, result.provider, result.model, result.inputTokens, result.outputTokens, "agent-turn");

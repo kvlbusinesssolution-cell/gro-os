@@ -153,9 +153,23 @@ export async function enrollContact(sequenceId: string, contactId: string, campa
   }
 }
 
+/**
+ * Phase 17 (Advanced Outbound + Email Deliverability) — real contact
+ * statuses that must stop a sequence, not just NOT_INTERESTED/UNSUBSCRIBED.
+ * Every one of these means a genuine human reply or outcome already
+ * happened (see logReplyCore, reply-actions.ts — REPLIED/INTERESTED/
+ * NOT_INTERESTED are all set from a real classified Reply, never guessed;
+ * MEETING_BOOKED is set once a real OutreachMeeting exists for this
+ * contact) — continuing a canned drip after any of these is exactly the
+ * "do not send Step 2 when recipient replied" case the spec calls out.
+ */
+const SEQUENCE_STOP_STATUSES = ["REPLIED", "INTERESTED", "NOT_INTERESTED", "MEETING_BOOKED", "UNSUBSCRIBED"] as const;
+
 export interface AdvanceSequenceResult extends ActionResult {
   advanced: boolean;
   complete?: boolean;
+  /** Phase 17 — set only when `advanced` is false because a real contact status stopped the sequence, distinct from "nothing due yet". */
+  stoppedReason?: string;
   draft?: EmailDraft;
 }
 
@@ -169,15 +183,16 @@ export interface AdvanceSequenceResult extends ActionResult {
  * elapsed — this is an idempotent "is it due yet" check, safe to call
  * repeatedly (on page view or on a cron tick) with no duplicate side effects.
  *
- * Phase 6: a contact who has told us NOT_INTERESTED or UNSUBSCRIBED must
- * never receive another generated step — checked first, before even loading
- * the sequence, as an honest no-op (not an error) so a normal "nothing due
- * yet" caller can't tell the difference from a suppressed one.
+ * Phase 6/17: a contact in any real SEQUENCE_STOP_STATUSES state — replied
+ * (any sentiment), booked a meeting, or unsubscribed — must never receive
+ * another generated step — checked first, before even loading the
+ * sequence, as an honest no-op (not an error) so a normal "nothing due
+ * yet" caller can't tell the difference from a stopped one.
  */
 export async function advanceSequenceCore(contactId: string, sequenceId: string, organizationId: string): Promise<AdvanceSequenceResult> {
   const contact = await prisma.contact.findUnique({ where: { id: contactId } });
-  if (contact && (contact.status === "NOT_INTERESTED" || contact.status === "UNSUBSCRIBED")) {
-    return { ok: true, advanced: false };
+  if (contact && (SEQUENCE_STOP_STATUSES as readonly string[]).includes(contact.status)) {
+    return { ok: true, advanced: false, stoppedReason: `Contact status is ${contact.status} — sequence stopped, not resumed automatically.` };
   }
 
   const sequence = await prisma.sequence.findUnique({ where: { id: sequenceId } });

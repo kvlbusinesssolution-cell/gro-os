@@ -166,3 +166,70 @@ export async function getOutreachDashboardStats(organizationId: string): Promise
 
   return { campaigns, emailsPrepared, replies, meetings, interested, notInterested, pending, tasks, sent, delivered, opened, clicked, converted };
 }
+
+/**
+ * Phase 17 (Advanced Outbound + Email Deliverability) — the real A/B
+ * variant report the spec asked for. EmailDraft.abVariant/abTestGroupId
+ * (draft-generator.ts) were already captured on every real send, but no
+ * code anywhere queried them back — this closes that gap by reusing the
+ * exact same data, never a second A/B-tracking model.
+ *
+ * Per-variant reply rate is computed from a real, direct FK
+ * (Reply.emailDraftId), same discipline as revenue-attribution.ts's real
+ * touchpoint matching — never estimated.
+ */
+export interface AbVariantResult {
+  variant: string;
+  sent: number;
+  delivered: number;
+  replied: number;
+  replyRate: number | null;
+  /** Never declared a "winner" below this many real sends — an honest floor, not a fabricated confidence interval. */
+  sufficientSampleSize: boolean;
+}
+
+export interface AbTestReport {
+  abTestGroupId: string;
+  variants: AbVariantResult[];
+  /** Null unless at least two variants both individually clear MIN_SAMPLE_SIZE — never declared from insufficient data. */
+  leadingVariant: string | null;
+}
+
+const MIN_SAMPLE_SIZE = 30;
+
+export async function getAbVariantPerformance(organizationId: string, abTestGroupId: string): Promise<AbTestReport> {
+  const drafts = await prisma.emailDraft.findMany({
+    where: { organizationId, abTestGroupId, status: "SENT" },
+    select: { id: true, abVariant: true, bouncedAt: true },
+  });
+
+  const byVariant = new Map<string, { sent: number; delivered: number; draftIds: string[] }>();
+  for (const draft of drafts) {
+    const variant = draft.abVariant ?? "(unlabeled)";
+    const entry = byVariant.get(variant) ?? { sent: 0, delivered: 0, draftIds: [] };
+    entry.sent += 1;
+    if (!draft.bouncedAt) entry.delivered += 1;
+    entry.draftIds.push(draft.id);
+    byVariant.set(variant, entry);
+  }
+
+  const variants: AbVariantResult[] = [];
+  for (const [variant, entry] of byVariant) {
+    const replied = entry.draftIds.length > 0 ? await prisma.reply.count({ where: { organizationId, emailDraftId: { in: entry.draftIds } } }) : 0;
+    variants.push({
+      variant,
+      sent: entry.sent,
+      delivered: entry.delivered,
+      replied,
+      replyRate: entry.sent > 0 ? replied / entry.sent : null,
+      sufficientSampleSize: entry.sent >= MIN_SAMPLE_SIZE,
+    });
+  }
+  variants.sort((a, b) => b.sent - a.sent);
+
+  const qualified = variants.filter((v) => v.sufficientSampleSize && v.replyRate !== null);
+  const leadingVariant =
+    qualified.length >= 2 ? qualified.reduce((best, v) => (v.replyRate! > best.replyRate! ? v : best)).variant : null;
+
+  return { abTestGroupId, variants, leadingVariant };
+}

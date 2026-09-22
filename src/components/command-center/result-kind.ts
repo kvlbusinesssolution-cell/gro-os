@@ -31,6 +31,9 @@ import {
   ScrollText,
   ShieldAlert,
   FileStack,
+  Briefcase,
+  Send,
+  UserRound,
 } from "lucide-react";
 
 import type { SearchResult, SearchResultKind } from "@/lib/search";
@@ -65,6 +68,9 @@ export const RESULT_KIND_ICONS: Record<SearchResultKind, IconType> = {
   businessDocument: ScrollText,
   projectRisk: ShieldAlert,
   ingestedDocument: FileStack,
+  job: Briefcase,
+  careerApplication: Send,
+  careerProfile: UserRound,
 };
 
 /** Group heading shown per kind. */
@@ -95,6 +101,9 @@ export const RESULT_KIND_LABELS: Record<SearchResultKind, string> = {
   businessDocument: "Legal & Project Docs",
   projectRisk: "Project Risks",
   ingestedDocument: "Knowledge Documents",
+  job: "Jobs",
+  careerApplication: "Job Applications",
+  careerProfile: "Career Profiles",
 };
 
 /**

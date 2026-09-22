@@ -67,14 +67,15 @@ export interface RevenueCommandCenterToday {
   /** EmailDraft rows created today currently sitting in PENDING_APPROVAL. */
   pendingApproval: number;
   /**
-   * Real delivered count — this app has no webhook-confirmed "delivered"
-   * timestamp on EmailDraft today (see src/app/api/webhooks/resend/route.ts:
-   * the Resend webhook only ever writes `bouncedAt`/`bounceReason` on
-   * `email.bounced` and `complainedAt` on `email.complained` — there is no
-   * `email.delivered` handler and no `deliveredAt` column). So `delivered`
-   * here is honestly defined as the closest real proxy: SENT today AND not
-   * bounced (`bouncedAt: null`) — never fabricated as a true delivery
-   * confirmation. Do not assume this means the inbox provider confirmed delivery.
+   * Phase 17: the Resend webhook now handles a real `email.delivered` event
+   * (src/app/api/webhooks/resend/route.ts), setting a real EmailDraft.
+   * deliveredAt from a signature-verified provider callback — the same
+   * real-confirmation discipline the WhatsApp channel already had. This
+   * count is still `status: SENT, bouncedAt: null` (unchanged query — see
+   * that route's own comment on why `status` deliberately never moves off
+   * SENT), so it remains the same honest "sent and not bounced" proxy at
+   * the aggregate level; `deliveredAt` is the real per-row confirmation
+   * signal now available wherever a caller reads the individual row.
    */
   delivered: number;
   /** EmailDraft rows in FAILED or BOUNCED whose sentAt (falling back to updatedAt when sentAt is null, e.g. a FAILED draft that never sent) is today. */

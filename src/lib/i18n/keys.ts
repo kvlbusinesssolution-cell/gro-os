@@ -17,6 +17,7 @@ export const en = {
   "nav.aiCommandCenter": "AI Command Center",
   "nav.board": "AI Executive Board",
   "nav.companies": "Companies",
+  "nav.career": "Career",
   "nav.companyDiscovery": "Company Discovery",
   "nav.opportunities": "AI Opportunities",
   "nav.priorityQueue": "AI Priority Queue",

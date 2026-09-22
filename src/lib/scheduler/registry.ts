@@ -34,6 +34,10 @@ import { runStaleCompanyReenrichment } from "@/lib/business-development/stale-re
 import { runPartnerDiscoverySync } from "@/lib/business-development/partner-discovery-sync-job";
 import { runRevenueAttributionRecompute } from "@/lib/analytics/revenue-attribution-job";
 import { runScheduledEmailSend } from "@/lib/business-development/scheduled-send-job";
+import { runScheduledCareerJobDiscovery } from "@/lib/career/career-discovery-job";
+import { runAutonomousApplicationSubmission, runSubmissionStatusReconciliation } from "@/lib/career/career-application-job";
+import { runFollowUpScheduling, runFollowUpSending } from "@/lib/career/career-followup-job";
+import { persistJobMarketSnapshot } from "@/lib/career/market-intelligence";
 import { runBackupScript } from "@/lib/ops/run-backup-script";
 import { runRestoreTest } from "@/lib/ops/restore-test";
 import type { JobDefinition, JobRunLog } from "./types";
@@ -939,6 +943,92 @@ function kvlCountryOutreachJob(groupKey: string): () => Promise<JobRunLog[]> {
   return () => runKvlCountryOutreach(groupKey);
 }
 
+/**
+ * Phase 19 (AI Job Discovery + Job Matching Engine) — real, opt-in-only
+ * career job discovery. Delegates entirely to runScheduledCareerJobDiscovery
+ * (career-discovery-job.ts), which itself only touches CareerProfile rows
+ * with discoveryEnabled: true — no unattended discovery for a profile that
+ * hasn't opted in, same discipline as leadDiscoveryJob above.
+ */
+async function careerJobDiscoveryJob(): Promise<JobRunLog[]> {
+  const summaries = await runScheduledCareerJobDiscovery();
+  if (summaries.length === 0) return [{ level: "info", message: "No career profiles have discovery enabled." }];
+  return summaries.map((s) =>
+    s.skipped
+      ? { level: "info", message: `Profile ${s.careerProfileId}: skipped — ${s.skipped}`, organizationId: s.organizationId }
+      : {
+          level: s.ok ? "info" : "warn",
+          message: s.ok ? `Profile ${s.careerProfileId}: ${s.newJobsCount ?? 0} new job(s) found.` : `Profile ${s.careerProfileId}: ${s.error}`,
+          organizationId: s.organizationId,
+        },
+  );
+}
+
+/**
+ * Phase 20 (Autonomous AI Job Application Agent) — real, opt-in-only
+ * autonomous submission (§21-23/§53). See career-application-job.ts's doc
+ * comment — a missed run just means tomorrow's run (or the user's own
+ * approve/submit action) covers it; nothing here is time-critical enough
+ * to warrant an automatic retry that could risk a double-run race.
+ */
+async function autonomousApplicationSubmissionJob(): Promise<JobRunLog[]> {
+  const summaries = await runAutonomousApplicationSubmission();
+  if (summaries.length === 0) return [{ level: "info", message: "No applications eligible for autonomous submission." }];
+  return summaries.map((s) => ({
+    level: s.error ? "warn" : "info",
+    message: s.error ? `Application ${s.applicationId}: ${s.error}` : `Application ${s.applicationId}: ${s.status}`,
+    organizationId: s.organizationId,
+  }));
+}
+
+/** Phase 20 — real, periodic re-check of any SUBMITTED/SUBMITTED_UNCONFIRMED application against its actual provider confirmation signal (§31/§39/§56). */
+async function submissionStatusReconciliationJob(): Promise<JobRunLog[]> {
+  const summaries = await runSubmissionStatusReconciliation();
+  if (summaries.length === 0) return [{ level: "info", message: "No applications pending confirmation." }];
+  return summaries.map((s) => ({
+    level: s.error ? "warn" : "info",
+    message: s.error ? `Application ${s.applicationId}: ${s.error}` : `Application ${s.applicationId}: ${s.status}`,
+    organizationId: s.organizationId,
+  }));
+}
+
+/** Phase 21 (§40/§57) — real, idempotent scheduling of configured follow-up touchpoints for newly-submitted applications. */
+async function careerFollowUpSchedulingJob(): Promise<JobRunLog[]> {
+  const summaries = await runFollowUpScheduling();
+  const withCreated = summaries.filter((s) => s.created > 0 || s.error);
+  if (withCreated.length === 0) return [{ level: "info", message: "No new follow-up rows to schedule." }];
+  return withCreated.map((s) => ({
+    level: s.error ? "warn" : "info",
+    message: s.error ? `Application ${s.applicationId}: ${s.error}` : `Application ${s.applicationId}: scheduled ${s.created} follow-up(s).`,
+    organizationId: s.organizationId,
+  }));
+}
+
+/** Phase 21 (§41/§58) — real send, re-checking every stopping condition immediately before send, never relying on schedule-time state. */
+async function careerFollowUpSendingJob(): Promise<JobRunLog[]> {
+  const summaries = await runFollowUpSending();
+  if (summaries.length === 0) return [{ level: "info", message: "No follow-ups due." }];
+  return summaries.map((s) => ({
+    level: s.status === "SKIPPED" ? "warn" : "info",
+    message: `Follow-up ${s.followUpId}: ${s.status}${s.reason ? ` — ${s.reason}` : ""}.`,
+    organizationId: s.organizationId,
+  }));
+}
+
+/**
+ * Phase 22 (§25/§51) — real, global job-market snapshot generation. Weekly
+ * (not daily) deliberately: this codebase's only real job source
+ * (Remotive) documents a real ~4-requests/day rate-limit guidance already
+ * honored by Phase 19's own discovery cooldown (job-discovery.ts) — a
+ * snapshot job doesn't need fresher-than-weekly granularity for a still-
+ * small, slowly-growing Job catalog, and running it more often would only
+ * generate near-identical snapshots.
+ */
+async function careerMarketSnapshotJob(): Promise<JobRunLog[]> {
+  const result = await persistJobMarketSnapshot();
+  return [{ level: "info", message: `Job market snapshot ${result.id}: ${result.sampleSize} real jobs sampled.` }];
+}
+
 async function kvlDailyCatchupJob(): Promise<JobRunLog[]> {
   return runKvlDailyCatchup();
 }
@@ -1139,6 +1229,62 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: leadDiscoveryJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
     priority: 4, // opt-in, non-urgent — runs before the research/scoring backlog job so newly-found companies have something to process
+  },
+  {
+    key: "career-job-discovery",
+    name: "AI Career Agent job discovery",
+    // Once daily — real profile-level DAILY/WEEKLY cadence and the
+    // provider's own 4-hour cooldown are enforced inside the handler
+    // (career-discovery-job.ts / job-discovery.ts), not by this cron
+    // expression alone.
+    cronExpression: "0 7 * * *",
+    handler: careerJobDiscoveryJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 }, // a missed run is fine — tomorrow's run (or the user's own "Search now") covers it; retrying risks exceeding Remotive's real rate-limit guidance
+    priority: 5, // opt-in, personal (non-revenue) feature — lowest urgency tier
+  },
+  {
+    key: "career-autonomous-application-submission",
+    name: "AI Career Agent autonomous application submission",
+    // After job discovery (7am) so newly discovered/matched jobs have a
+    // chance to reach READY_FOR_REVIEW before this runs.
+    cronExpression: "0 8 * * *",
+    handler: autonomousApplicationSubmissionJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 }, // never auto-retried — a real safety gate re-runs fresh next cycle regardless
+    priority: 5, // opt-in, personal feature — lowest urgency tier, same as job discovery
+  },
+  {
+    key: "career-application-submission-status-check",
+    name: "AI Career Agent submission status reconciliation",
+    cronExpression: "*/30 * * * *",
+    handler: submissionStatusReconciliationJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    priority: 4, // more time-sensitive than discovery — a real deliveredAt confirmation should reflect promptly
+  },
+  {
+    key: "career-followup-scheduling",
+    name: "AI Career Agent follow-up scheduling",
+    cronExpression: "0 9 * * *",
+    handler: careerFollowUpSchedulingJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    priority: 5,
+  },
+  {
+    key: "career-followup-sending",
+    name: "AI Career Agent follow-up sending",
+    // Hourly — re-checks every stopping condition fresh at send time (§58); missing one hour's window just means it sends on the next pass.
+    cronExpression: "0 * * * *",
+    handler: careerFollowUpSendingJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    priority: 5,
+  },
+  {
+    key: "career-market-snapshot-generation",
+    name: "AI Career Agent job market snapshot generation",
+    // Weekly, Sunday 6am — see careerMarketSnapshotJob's own doc comment.
+    cronExpression: "0 6 * * 0",
+    handler: careerMarketSnapshotJob,
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    priority: 5,
   },
   // KVL sector outreach, split by target country's own business hours
   // (10:30am local) rather than one fixed IST time — see

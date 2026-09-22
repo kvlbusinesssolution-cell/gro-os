@@ -5,6 +5,7 @@ export const zh: Dictionary = {
   "nav.aiCommandCenter": "AI 指挥中心",
   "nav.board": "AI 执行委员会",
   "nav.companies": "公司",
+  "nav.career": "职业发展",
   "nav.companyDiscovery": "公司发现",
   "nav.opportunities": "AI 机会",
   "nav.priorityQueue": "AI 优先队列",

@@ -26,5 +26,15 @@ export async function extractResumeText(buffer: Buffer, mimeType: string): Promi
     return result.value;
   }
 
-  throw new Error(`Unsupported resume file type "${mimeType}". Use PDF or DOCX.`);
+  // Phase 18 (AI Career Agent Foundation) — real, trivial TXT support
+  // (no parsing library needed, just real UTF-8 decoding). Legacy binary
+  // .doc (application/msword) is deliberately NOT supported here — it needs
+  // a real binary-format parser this app doesn't have; callers should show
+  // an honest "not supported, please use PDF/DOCX/TXT" error rather than
+  // this function silently mis-decoding it as text.
+  if (mimeType === "text/plain") {
+    return buffer.toString("utf-8");
+  }
+
+  throw new Error(`Unsupported resume file type "${mimeType}". Use PDF, DOCX or TXT.`);
 }

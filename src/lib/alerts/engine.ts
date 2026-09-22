@@ -18,6 +18,7 @@ import {
   evaluateEmailDeliverabilityRisk,
   evaluateDealRiskCritical,
   evaluatePipelineConcentrationRisk,
+  evaluateIntentSurge,
   type AlertRuleResult,
 } from "./rules";
 import { generateMitigationSuggestions } from "./mitigation";
@@ -40,6 +41,7 @@ const RULES: Record<AlertType, (organizationId: string) => Promise<AlertRuleResu
   EMAIL_DELIVERABILITY_RISK: evaluateEmailDeliverabilityRisk,
   DEAL_RISK_CRITICAL: evaluateDealRiskCritical,
   PIPELINE_CONCENTRATION_RISK: evaluatePipelineConcentrationRisk,
+  INTENT_SURGE: evaluateIntentSurge,
 };
 
 /**

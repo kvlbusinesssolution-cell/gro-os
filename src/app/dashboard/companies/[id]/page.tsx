@@ -56,6 +56,7 @@ import { ExportMenu } from "../_components/export-menu";
 import { getCompanyCompleteTimeline } from "@/lib/business-development/company-complete-timeline";
 import { summarizeCompanyConversation } from "@/lib/business-development/company-conversation-summary";
 import { suggestNextActionForCompany } from "@/lib/business-development/company-next-action";
+import { classifyEvidenceFreshness } from "@/lib/business-development/evidence-freshness";
 import type { OpportunityScoreBreakdown } from "@/lib/business-development/opportunity-priority";
 import type { TaskStatus } from "@/generated/prisma/client";
 
@@ -866,7 +867,11 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                 createdAt={company.createdAt.toISOString()}
               />
               <CompanyEvidencePanel
-                evidence={company.evidence.map((e) => ({ ...e, discoveredAt: e.discoveredAt.toISOString() }))}
+                evidence={company.evidence.map((e) => ({
+                  ...e,
+                  discoveredAt: e.discoveredAt.toISOString(),
+                  freshness: classifyEvidenceFreshness(e.discoveredAt, new Date(), company.leadOpportunities.length > 0),
+                }))}
               />
             </div>
           </TabsContent>

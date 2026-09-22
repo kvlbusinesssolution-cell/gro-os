@@ -26,7 +26,14 @@ export type SearchResultKind =
   | "invoice"
   | "businessDocument"
   | "projectRisk"
-  | "ingestedDocument";
+  | "ingestedDocument"
+  // Phase 23 — Career engine entities (Section 14's "Jobs, Candidates,
+  // Applications" requirement; there is no separate Candidate model in
+  // this codebase — CareerProfile is the equivalent real entity, see the
+  // Phase 23 report section K).
+  | "job"
+  | "careerApplication"
+  | "careerProfile";
 
 export interface SearchResult {
   kind: SearchResultKind;
@@ -73,6 +80,9 @@ export async function globalSearch(organizationId: string, query: string): Promi
     businessDocuments,
     projectRisks,
     ingestedDocuments,
+    careerJobs,
+    careerApplications,
+    careerProfiles,
   ] = await Promise.all([
     prisma.meeting.findMany({
       where: { organizationId, OR: [{ title: { contains: q, mode: "insensitive" } }, { agenda: { contains: q, mode: "insensitive" } }] },
@@ -226,6 +236,30 @@ export async function globalSearch(organizationId: string, query: string): Promi
     // "document" kind above, which is the org's uploaded-file Document model.
     prisma.ingestedDocument.findMany({
       where: { organizationId, title: { contains: q, mode: "insensitive" } },
+      take: RESULT_LIMIT_PER_KIND,
+      orderBy: { createdAt: "desc" },
+    }),
+    // Job is deliberately NOT organizationId-scoped (Phase 19: a real
+    // external job posting is the same fact regardless of discovering
+    // org) — scoped here to jobs this org has actually matched against,
+    // via JobMatch, so search stays meaningfully org-relevant rather than
+    // surfacing every org's discovered jobs.
+    prisma.job.findMany({
+      where: {
+        OR: [{ title: { contains: q, mode: "insensitive" } }, { company: { contains: q, mode: "insensitive" } }],
+        matches: { some: { organizationId } },
+      },
+      take: RESULT_LIMIT_PER_KIND,
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.jobApplication.findMany({
+      where: { organizationId, job: { OR: [{ title: { contains: q, mode: "insensitive" } }, { company: { contains: q, mode: "insensitive" } }] } },
+      take: RESULT_LIMIT_PER_KIND,
+      orderBy: { createdAt: "desc" },
+      include: { job: { select: { title: true, company: true } } },
+    }),
+    prisma.careerProfile.findMany({
+      where: { organizationId, OR: [{ name: { contains: q, mode: "insensitive" } }, { currentRole: { contains: q, mode: "insensitive" } }] },
       take: RESULT_LIMIT_PER_KIND,
       orderBy: { createdAt: "desc" },
     }),
@@ -413,6 +447,27 @@ export async function globalSearch(organizationId: string, query: string): Promi
       title: d.title,
       subtitle: d.status,
       href: `/dashboard/knowledge-base/documents/${d.id}`,
+    })),
+    ...careerJobs.map((j) => ({
+      kind: "job" as const,
+      id: j.id,
+      title: j.title,
+      subtitle: j.company,
+      href: `/dashboard/career/jobs/${j.id}`,
+    })),
+    ...careerApplications.map((a) => ({
+      kind: "careerApplication" as const,
+      id: a.id,
+      title: `${a.job.title} @ ${a.job.company}`,
+      subtitle: a.status,
+      href: `/dashboard/career/applications/${a.id}`,
+    })),
+    ...careerProfiles.map((p) => ({
+      kind: "careerProfile" as const,
+      id: p.id,
+      title: p.name,
+      subtitle: p.currentRole ?? undefined,
+      href: `/dashboard/career/profile/${p.id}`,
     })),
   ];
 

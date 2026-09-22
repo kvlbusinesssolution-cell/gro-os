@@ -5,6 +5,7 @@ export const pt: Dictionary = {
   "nav.aiCommandCenter": "Centro de Comando de IA",
   "nav.board": "Conselho Executivo de IA",
   "nav.companies": "Empresas",
+  "nav.career": "Carreira",
   "nav.companyDiscovery": "Descoberta de Empresas",
   "nav.opportunities": "Oportunidades de IA",
   "nav.priorityQueue": "Fila de Prioridades de IA",

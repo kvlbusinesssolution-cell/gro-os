@@ -55,7 +55,7 @@ export async function POST(request: Request) {
     const type = extractType(payload);
     const emailId = extractEmailId(payload);
 
-    if (!emailId || (type !== "email.bounced" && type !== "email.complained")) {
+    if (!emailId || (type !== "email.bounced" && type !== "email.complained" && type !== "email.delivered")) {
       return NextResponse.json({ ok: true, skipped: true });
     }
 
@@ -114,6 +114,40 @@ export async function POST(request: Request) {
         description: `Email bounced (Resend message ${emailId}): ${bounceReason}`,
         metadata: { emailDraftId: draft.id, provider: "RESEND", resendMessageId: emailId, bounceType },
       });
+    } else if (type === "email.delivered") {
+      // Phase 17 (Advanced Outbound + Email Deliverability) — the real
+      // delivered signal that was missing (see this file's own prior
+      // gap: only bounced/complained were ever handled). Sets the real
+      // EmailDraft.deliveredAt timestamp from a real, signature-verified
+      // provider callback — same additive-field precedent the complaint
+      // branch below already uses (complainedAt is set WITHOUT moving
+      // `status` off SENT). Deliberately does NOT transition `status` to
+      // DELIVERED here: dozens of existing queries across this codebase
+      // filter EmailDraft by `status: "SENT"` to mean "really sent,
+      // successfully" (campaign stats, revenue attribution, the Sent
+      // inbox tab, etc.) — moving status would silently break all of
+      // them. `deliveredAt` is the real, additive, non-breaking signal.
+      if (draft.status === "SENT" && !draft.deliveredAt) {
+        await prisma.emailDraft.update({
+          where: { id: draft.id },
+          data: { deliveredAt: new Date() },
+        });
+      }
+      if (providerEventId) {
+        await prisma.emailProviderEvent
+          .create({
+            data: {
+              organizationId: draft.organizationId,
+              emailDraftId: draft.id,
+              provider: "RESEND",
+              eventType: "DELIVERED",
+              recipient: recipientEmail,
+              providerEventId,
+              metadata: payload as object,
+            },
+          })
+          .catch(() => {});
+      }
     } else {
       await prisma.emailDraft.update({
         where: { id: draft.id },

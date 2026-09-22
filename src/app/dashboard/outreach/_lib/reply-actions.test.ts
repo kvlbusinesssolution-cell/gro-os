@@ -138,7 +138,9 @@ describe("reply-actions", () => {
     // "Sequence not found" branch would otherwise fire.
     const result = await advanceSequenceCore(contactId, "does-not-exist", orgId);
 
-    expect(result).toEqual({ ok: true, advanced: false });
+    expect(result.ok).toBe(true);
+    expect(result.advanced).toBe(false);
+    expect(result.stoppedReason).toContain("NOT_INTERESTED");
   });
 
   it("advanceSequenceCore: is an honest no-op when the contact is UNSUBSCRIBED, without even loading the sequence", async () => {
@@ -146,16 +148,22 @@ describe("reply-actions", () => {
 
     const result = await advanceSequenceCore(contactId, "does-not-exist", orgId);
 
-    expect(result).toEqual({ ok: true, advanced: false });
+    expect(result.ok).toBe(true);
+    expect(result.advanced).toBe(false);
+    expect(result.stoppedReason).toContain("UNSUBSCRIBED");
   });
 
-  it("advanceSequenceCore: still reports 'Sequence not found' for an unaffected contact status", async () => {
+  // Phase 17 fix: REPLIED used to be treated as "unaffected" here, which was
+  // the real bug — a contact who genuinely replied (any sentiment) would
+  // still receive the next canned sequence step. It's now a real stop
+  // status, same short-circuit as NOT_INTERESTED/UNSUBSCRIBED above.
+  it("advanceSequenceCore: REPLIED is also a real stop status, same short-circuit as NOT_INTERESTED/UNSUBSCRIBED", async () => {
     await prisma.contact.update({ where: { id: contactId }, data: { status: "REPLIED" } });
 
     const result = await advanceSequenceCore(contactId, "does-not-exist", orgId);
 
-    expect(result.ok).toBe(false);
+    expect(result.ok).toBe(true);
     expect(result.advanced).toBe(false);
-    expect(result.error).toBe("Sequence not found.");
+    expect(result.stoppedReason).toContain("REPLIED");
   });
 });

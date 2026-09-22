@@ -19,6 +19,20 @@ const SOURCE_LABEL: Record<EvidenceSource, string> = {
   COMPANY_INTELLIGENCE: "Company intelligence",
 };
 
+export type EvidenceFreshness = "FRESH" | "AGING" | "STALE";
+
+const FRESHNESS_LABEL: Record<EvidenceFreshness, string> = {
+  FRESH: "Fresh",
+  AGING: "Aging",
+  STALE: "Stale",
+};
+
+const FRESHNESS_VARIANT: Record<EvidenceFreshness, "default" | "secondary" | "outline"> = {
+  FRESH: "default",
+  AGING: "secondary",
+  STALE: "outline",
+};
+
 export interface CompanyEvidenceView {
   id: string;
   kind: EvidenceKind;
@@ -27,6 +41,8 @@ export interface CompanyEvidenceView {
   sourceUrl: string | null;
   confidence: number;
   discoveredAt: string;
+  /** Phase 16 — computed server-side from discoveredAt (see evidence-freshness.ts), never guessed client-side. */
+  freshness: EvidenceFreshness;
 }
 
 /**
@@ -170,6 +186,7 @@ function EvidenceRow({ item }: { item: CompanyEvidenceView }) {
         <Badge variant={isRawFact ? "outline" : "accent"}>{isRawFact ? "Verified fact" : "AI interpretation"}</Badge>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Badge variant="outline">{SOURCE_LABEL[item.source]}</Badge>
+          <Badge variant={FRESHNESS_VARIANT[item.freshness]}>{FRESHNESS_LABEL[item.freshness]}</Badge>
           <span>{Math.round(item.confidence * 100)}% confidence</span>
         </div>
       </div>

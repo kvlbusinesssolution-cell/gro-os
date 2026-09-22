@@ -5,6 +5,7 @@ export const ur: Dictionary = {
   "nav.aiCommandCenter": "اے آئی کمانڈ سینٹر",
   "nav.board": "اے آئی ایگزیکٹو بورڈ",
   "nav.companies": "کمپنیاں",
+  "nav.career": "کیریئر",
   "nav.companyDiscovery": "کمپنی کی دریافت",
   "nav.opportunities": "اے آئی مواقع",
   "nav.priorityQueue": "اے آئی ترجیحی قطار",

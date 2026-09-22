@@ -59,4 +59,7 @@ next-env.d.ts
 # real database dumps produced by scripts/backup-database.sh — never checked in
 # (this repo is public; a committed dump would leak real data)
 /storage/backups
+
+# uploaded career resumes — real user files, never checked in
+/storage/career-resumes
 __pycache__/

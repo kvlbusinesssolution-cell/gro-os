@@ -12,6 +12,7 @@ import { generateStructured } from "@/lib/ai/fallback";
 import { applyReplyAutomation } from "@/lib/outreach/reply-automation";
 import { computeIntentScore } from "@/lib/business-development/intent-scoring";
 import { analyzeConversation } from "@/lib/business-development/conversation-intelligence";
+import { processCareerReply } from "@/lib/career/recruiter-communication-orchestrator";
 import { ReplyIntent as ReplyIntentEnum } from "@/generated/prisma/client";
 import type { DraftChannel, ReplySentiment, ReplyIntent } from "@/generated/prisma/client";
 
@@ -179,6 +180,17 @@ export async function logReplyCore(
     await analyzeConversation(organizationId, contactId);
   } catch (error) {
     console.error(`[reply-actions] conversation intelligence analysis failed for contact ${contactId}:`, error);
+  }
+
+  // Phase 21 (Recruiter Communication + Interview Automation) — real,
+  // event-driven career classification. `processCareerReply` itself checks
+  // the Contact's "career-application" tag and no-ops for every ordinary
+  // sales Reply, but this call is still wrapped for the same per-step
+  // isolation discipline as the two calls above.
+  try {
+    await processCareerReply(reply.id);
+  } catch (error) {
+    console.error(`[reply-actions] career communication processing failed for reply ${reply.id}:`, error);
   }
 
   return { ok: true, replyId: reply.id, sentiment, intent };

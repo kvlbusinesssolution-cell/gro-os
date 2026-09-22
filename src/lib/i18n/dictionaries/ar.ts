@@ -5,6 +5,7 @@ export const ar: Dictionary = {
   "nav.aiCommandCenter": "مركز قيادة الذكاء الاصطناعي",
   "nav.board": "مجلس الإدارة الذكي",
   "nav.companies": "الشركات",
+  "nav.career": "المسيرة المهنية",
   "nav.companyDiscovery": "اكتشاف الشركات",
   "nav.opportunities": "فرص الذكاء الاصطناعي",
   "nav.priorityQueue": "قائمة أولويات الذكاء الاصطناعي",

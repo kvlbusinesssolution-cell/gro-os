@@ -5,6 +5,7 @@ export const de: Dictionary = {
   "nav.aiCommandCenter": "KI-Kommandozentrale",
   "nav.board": "KI-Vorstand",
   "nav.companies": "Unternehmen",
+  "nav.career": "Karriere",
   "nav.companyDiscovery": "Unternehmenserkennung",
   "nav.opportunities": "KI-Chancen",
   "nav.priorityQueue": "KI-Prioritätswarteschlange",

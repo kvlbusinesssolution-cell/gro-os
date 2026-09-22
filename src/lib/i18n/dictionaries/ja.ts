@@ -5,6 +5,7 @@ export const ja: Dictionary = {
   "nav.aiCommandCenter": "AIコマンドセンター",
   "nav.board": "AI エグゼクティブボード",
   "nav.companies": "会社",
+  "nav.career": "キャリア",
   "nav.companyDiscovery": "企業発見",
   "nav.opportunities": "AIチャンス",
   "nav.priorityQueue": "AI優先キュー",

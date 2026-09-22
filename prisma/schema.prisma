@@ -71,7 +71,10 @@ model User {
   memberships           Membership[]
   sentInvitations       Invitation[]            @relation("InvitationSender")
   auditLogs             AuditLog[]
+  careerProfiles        CareerProfile[]
+  jobApplications       JobApplication[]
   connectedIntegrations IntegrationConnection[]
+  agentRuns             AgentRun[]
   preference            UserPreference?
 
   createdMeetings           Meeting[]
@@ -410,11 +413,18 @@ model Organization {
   // as User.isPlatformOwner (src/lib/billing/platform-admin.ts).
   isOwnerOrg Boolean @default(false)
 
-  memberships Membership[]
-  invitations Invitation[]
-  workspace   Workspace?
-  aiAgents    AIAgentInstance[]
-  auditLogs   AuditLog[]
+  memberships             Membership[]
+  invitations             Invitation[]
+  careerProfiles          CareerProfile[]
+  jobMatches              JobMatch[]
+  jobApplications         JobApplication[]
+  recruiterCommunications RecruiterCommunication[]
+  agentRuns               AgentRun[]
+  careerInterviews        CareerInterview[]
+  careerFollowUps         CareerFollowUp[]
+  workspace               Workspace?
+  aiAgents                AIAgentInstance[]
+  auditLogs               AuditLog[]
 
   meetings           Meeting[]
   tasks              Task[]
@@ -711,19 +721,19 @@ model DealStage {
 }
 
 model Deal {
-  id             String  @id @default(cuid())
-  organizationId String
-  dealStageId    String
-  companyId      String?
-  contactId      String?
-  sourceLeadId   String?
+  id                  String  @id @default(cuid())
+  organizationId      String
+  dealStageId         String
+  companyId           String?
+  contactId           String?
+  sourceLeadId        String?
   // Phase 13: real FK back to the AI-detected LeadOpportunity this Deal was
   // converted from via addOpportunityToCrmCore, closing the canonical
   // Opportunity -> Deal gap that revenue-attribution.ts previously bridged
   // with a "most recent opportunity for this company" heuristic. Null for
   // Deals created directly in the CRM (never from an Opportunity).
   sourceOpportunityId String?
-  ownerUserId    String?
+  ownerUserId         String?
 
   name              String
   // Deal value in the organization's currency — same "real number or null,
@@ -739,13 +749,13 @@ model Deal {
   lostReason        String?
   notes             String?         @db.Text
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  dealStage    DealStage    @relation(fields: [dealStageId], references: [id], onDelete: Cascade)
-  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
-  sourceLead   Lead?        @relation(fields: [sourceLeadId], references: [id], onDelete: SetNull)
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  dealStage         DealStage        @relation(fields: [dealStageId], references: [id], onDelete: Cascade)
+  company           Company?         @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact           Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  sourceLead        Lead?            @relation(fields: [sourceLeadId], references: [id], onDelete: SetNull)
   sourceOpportunity LeadOpportunity? @relation(fields: [sourceOpportunityId], references: [id], onDelete: SetNull)
-  owner        User?        @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  owner             User?            @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
   proposals           Proposal[]
   tasks               Task[]
@@ -5009,6 +5019,21 @@ enum ContactStatus {
   UNSUBSCRIBED
 }
 
+// Phase 16 — real email/phone verification state. UNVERIFIED means "a
+// verification call was made but did not confirm validity" (provider said
+// unknown/undeliverable-unconfirmed); INVALID/RISKY are real provider
+// verdicts; VERIFIED requires an actual provider confirmation, never set
+// just because the field has a value. No verification provider is wired up
+// yet in this environment (see phone-verification.ts's own doc comment) —
+// every Contact today genuinely sits at the honest default, UNKNOWN.
+enum ContactVerificationStatus {
+  UNKNOWN
+  VERIFIED
+  UNVERIFIED
+  INVALID
+  RISKY
+}
+
 enum DraftChannel {
   EMAIL
   LINKEDIN
@@ -5036,6 +5061,12 @@ enum DraftPurpose {
   RE_ENGAGEMENT
   CONNECTION_REQUEST
   CONVERSATION_SUMMARY
+  // Phase 20 (Autonomous AI Job Application Agent) — a real recruiter/
+  // hiring-manager email sent as part of a JobApplication's submission,
+  // going through this exact same DRAFT -> APPROVED -> QUEUED -> SENT
+  // pipeline (see application-submission.ts) rather than a separate send
+  // path, so it gets the same real Resend deliveredAt confirmation.
+  JOB_APPLICATION
 }
 
 enum EmailTone {
@@ -5140,6 +5171,14 @@ model Contact {
   decisionMakerProbability Float?
   enrichmentStatus         EnrichmentStatus @default(NEVER_ENRICHED)
   lastEnrichedAt           DateTime?
+
+  // Phase 16 (Advanced Enrichment + Buying Intent Intelligence) — real
+  // verification state for the stored email/phone, never inferred from
+  // "a value exists". Defaults to UNKNOWN (no real verification provider
+  // call has been made against this contact yet) rather than defaulting to
+  // VERIFIED — see the field docs on the enums below.
+  emailVerificationStatus ContactVerificationStatus @default(UNKNOWN)
+  phoneVerificationStatus ContactVerificationStatus @default(UNKNOWN)
 
   organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
@@ -5695,16 +5734,21 @@ model Reply {
   // human actually opening the thread. Null means never explicitly opened.
   readAt            DateTime?
 
-  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  contact              Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  campaign             Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  emailDraft           EmailDraft?      @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
-  loggedByUser         User             @relation(fields: [loggedByUserId], references: [id], onDelete: Cascade)
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact                Contact                 @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign               Campaign?               @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  emailDraft             EmailDraft?             @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
+  loggedByUser           User                    @relation(fields: [loggedByUserId], references: [id], onDelete: Cascade)
   // Phase 6: real AI-suggested EmailDraft(s) generated in direct response to this reply.
-  suggestedReplyDrafts EmailDraft[]     @relation("DraftInReplyToReply")
+  suggestedReplyDrafts   EmailDraft[]            @relation("DraftInReplyToReply")
   // KVL's own owner-escalation workflow (see RateNegotiation below) — a
   // reply classified PRICE_QUESTION gets exactly one negotiation thread.
-  rateNegotiation      RateNegotiation?
+  rateNegotiation        RateNegotiation?
+  // Phase 21 — set only when this Reply's Contact is tagged
+  // "career-application" (see application-submission.ts) and real career
+  // classification actually ran. Every other org's ordinary sales Reply
+  // never gets this row.
+  recruiterCommunication RecruiterCommunication?
 
   createdAt DateTime @default(now())
 
@@ -7099,6 +7143,12 @@ enum AlertType {
   // deals (src/lib/forecast/pipeline-risk.ts). Org-level: relatedEntityId
   // is null.
   PIPELINE_CONCENTRATION_RISK
+  // Phase 16 (Advanced Enrichment + Buying Intent Intelligence) — a real
+  // IntentScore row is currently in the HIGH band (src/lib/business-
+  // development/intent-scoring.ts). relatedEntityId = the Company id.
+  // Never fires on an AI guess — the underlying IntentScore.signals are
+  // real, evidence-backed entries already computed by computeIntentScore.
+  INTENT_SURGE
 }
 
 enum AlertStatus {
@@ -8137,8 +8187,8 @@ model LeadOpportunity {
   ownerUserId              String?
   snoozedUntil             DateTime?
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  owner   User?   @relation("OpportunityOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  company        Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner          User?   @relation("OpportunityOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   // Phase 13: the real Deal(s) this opportunity was converted into. Many-valued
   // for the same "never fail a write over an edge case" reasoning as
   // Lead.convertedDeals — the UI enforces "convert once" via isTerminal().
@@ -9157,6 +9207,12 @@ enum LearningRecommendationCategory {
   SERVICE_MATCHING
   FOLLOW_UP
   OTHER
+  // ===== Phase 22 (Career Learning + Job Market Intelligence) =====
+  CV_VERSION
+  SKILL_DEVELOPMENT
+  JOB_PRIORITIZATION
+  APPLICATION_TIMING
+  SOURCE_MONITORING
 }
 
 enum LearningRecommendationStatus {
@@ -9340,9 +9396,24 @@ model LearningPattern {
 // The governed recommendation queue (§33). Every row requires explicit
 // human review — the engine only ever writes PROPOSED here, never
 // APPROVED/IMPLEMENTED itself (§32).
+//
+// Phase 22 (Career Learning + Job Market Intelligence) reuses this exact
+// model for career recommendations (CV_VERSION/SKILL_DEVELOPMENT/
+// JOB_PRIORITIZATION/APPLICATION_TIMING/SOURCE_MONITORING below) rather than
+// creating a parallel "CareerRecommendation" table — the governance shape
+// (PROPOSED-only, approvalRequired always true, sampleSize + confidence
+// required) is exactly what Phase 22 Part 48 asks for. `careerProfileId` is
+// a scalar-only cross-domain link, same convention as LearningObservation's
+// own companyId/dealId/etc — a revenue recommendation simply leaves it
+// null, and vice versa.
 model LearningRecommendation {
   id             String @id @default(cuid())
   organizationId String
+
+  // Null for a revenue-domain recommendation. Set (and the sole ownership
+  // check used by career-recommendations.ts) for a career one — never
+  // organizationId alone, since a career profile is the individual user's.
+  careerProfileId String?
 
   category        LearningRecommendationCategory
   title           String
@@ -9350,6 +9421,9 @@ model LearningRecommendation {
   suggestedChange String                         @db.Text
   reasoning       String                         @db.Text
 
+  // Real applicationId/jobId references this recommendation's evidence is
+  // drawn from (career domain) or real LearningPattern ids (revenue
+  // domain) — same field, same "never a free-floating claim" discipline.
   evidencePatternIds String[]           @default([])
   sampleSize         Int
   confidence         LearningConfidence
@@ -9378,6 +9452,7 @@ model LearningRecommendation {
 
   @@index([organizationId, status])
   @@index([organizationId, category])
+  @@index([careerProfileId])
 }
 
 // Point-in-time shadow-mode comparison only (§34) — deliberately NOT an
@@ -9603,4 +9678,1084 @@ model ForecastCalibration {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, subject, computedAt])
+}
+
+// ===== Phase 18 (AI Career Agent Foundation) =====
+// Deliberately NOT built on the existing Candidate/JobOpening models — a
+// real Phase 14 audit verified those are an inverted data model (a tenant
+// ORGANIZATION owns Candidates when hiring for ITS OWN JobOpenings; a
+// Candidate has no userId and cannot represent "a GrowthOS user managing
+// their own career"). Reusing them would conflate the two, so these two new,
+// minimal models exist instead — everything else (Document Storage's
+// FileStore primitive, the real PDF/DOCX/TXT text-extraction function, the
+// AI provider fallback chain, auth/RBAC, audit logging) is reused verbatim,
+// never duplicated.
+model CareerProfile {
+  id             String @id @default(cuid())
+  userId         String
+  // Kept for the same tenant-scoping consistency every other model in this
+  // schema has, and so existing organization-wide admin/audit tooling can
+  // still see this data exists — but access control for career data is
+  // gated on `userId` ownership, never merely on organization membership
+  // (a career profile is the individual USER's, not the org's).
+  organizationId String
+
+  // Profile label the user chooses — e.g. "Senior React Developer". Lets one
+  // user maintain multiple, isolated target-role profiles (§6).
+  name      String
+  isPrimary Boolean             @default(false)
+  status    CareerProfileStatus @default(ACTIVE)
+
+  // ===== User-editable career identity — USER_PROVIDED unless noted =====
+  currentRole       String?
+  careerLevel       String?
+  yearsOfExperience Float?
+  location          String?
+  industries        String[]
+  // Each a real, structured array — see field docs on CareerResume for the
+  // RAW_FACT/AI_INFERENCE/USER_VERIFIED provenance discipline these are
+  // filled from. Once a user edits/verifies here, THIS value is the source
+  // of truth — an AI re-extraction on a later resume upload never silently
+  // overwrites it (§5, §13).
+  skills            Json?
+  education         Json?
+  certifications    Json?
+  projects          Json?
+  achievements      Json?
+  portfolioUrl      String?
+  githubUrl         String?
+  linkedinUrl       String?
+  websiteUrl        String?
+
+  // ===== Career preferences (§15) — never AI-inferred automatically; only
+  // ever set by a real, explicit user action. =====
+  targetRoles             String[]
+  targetCountries         String[]
+  targetCities            String[]
+  workMode                CareerWorkMode?
+  salaryMin               Float?
+  salaryMax               Float?
+  salaryCurrency          String?
+  employmentTypes         CareerEmploymentType[]
+  experienceLevelMinYears Int?
+  experienceLevelMaxYears Int?
+  preferredTechnologies   String[]
+  excludedTechnologies    String[]
+  preferredCompanies      String[]
+  excludedCompanies       String[]
+  relocationPreference    CareerRelocationPreference?
+  // Null = not set. 0 = immediate. Otherwise real days.
+  noticePeriodDays        Int?
+
+  // ===== Phase 19 (AI Job Discovery + Job Matching Engine) — real
+  // discovery configuration, deliberately kept ON this existing model
+  // rather than a new JobSearchProfile: every field discovery actually
+  // needs (targetRoles, targetCountries, workMode, salary, excludedCompanies,
+  // etc.) already exists above from Phase 18. Only the 3 fields below are
+  // genuinely new. =====
+  // Real opt-in gate — mirrors LeadDiscoveryConfig.discoveryEnabled's own
+  // discipline (stale-reenrichment-job.ts): a scheduled job that makes real
+  // outbound network calls must never run for a profile that hasn't
+  // explicitly opted in.
+  discoveryEnabled   Boolean                  @default(false)
+  discoveryFrequency CareerDiscoveryFrequency @default(MANUAL_ONLY)
+  // 0-100. Jobs below this score are still stored (real record, real
+  // traceability) but excluded from the default job list view — never
+  // silently discarded.
+  minMatchThreshold  Int                      @default(0)
+
+  // ===== Phase 20 (Autonomous AI Job Application Agent) — real automation
+  // policy. Deliberately kept ON this existing model rather than a new
+  // ApplicationPolicy model: every OTHER real policy control the spec asks
+  // for (allowed/excluded roles, industries, countries, companies, salary
+  // minimum, employment types, minimum match score) already exists as a
+  // field above (targetRoles, excludedCompanies, salaryMin, employmentTypes,
+  // minMatchThreshold, etc.) from Phase 18/19. Only these 5 fields are
+  // genuinely new. =====
+  // Real opt-in gate for autonomous behavior — mirrors discoveryEnabled's
+  // own discipline. DISCOVERY_ONLY is the safe default; nothing beyond
+  // Phase 19's existing discovery ever runs without an explicit upgrade.
+  applicationAutomationMode  ApplicationAutomationMode    @default(DISCOVERY_ONLY)
+  applicationRequireApproval Boolean                      @default(true)
+  maxApplicationsPerDay      Int                          @default(5)
+  maxApplicationsPerWeek     Int                          @default(20)
+  // The autonomy safety gate (§48) never lets AUTO_APPLY_APPROVED/
+  // FULL_AUTONOMOUS submit below this eligibility bar — real, user-set,
+  // never silently loosened.
+  minEligibilityForAutoApply ApplicationEligibilityStatus @default(LIKELY_ELIGIBLE)
+
+  // ===== Phase 21 (Recruiter Communication + Interview Automation) — real
+  // scheduling/follow-up policy. No new "ApplicationPolicy"-style model:
+  // these are genuinely new controls, added directly onto the existing
+  // profile like Phase 20's 5 fields above. =====
+  // Real opt-in gate (§40) — mirrors discoveryEnabled/applicationAutomationMode's
+  // own discipline. Off by default; nothing sends a follow-up without this.
+  followUpEnabled             Boolean @default(false)
+  // Day offsets from an application's submittedAt (§40) — user-configurable,
+  // never hard-coded in the follow-up job itself. [0,5,10] is only the
+  // spec's own suggested DEFAULT value for a new profile.
+  followUpIntervalDays        Int[]   @default([0, 5, 10])
+  // §19 — user-configured working hours for interview scheduling. Null
+  // fields mean genuinely "not configured" (§19: never invent availability).
+  workingHoursStart           String?
+  workingHoursEnd             String?
+  workingHoursTimezone        String?
+  // 0=Sunday..6=Saturday. Empty array is a real, distinct "no working days
+  // configured" state, never defaulted to Mon-Fri silently.
+  workingDays                 Int[]   @default([])
+  // [{ startsAt: ISO string, endsAt: ISO string, reason: string }] — real,
+  // user-entered blackout windows (§19), never AI-inferred.
+  blackoutPeriods             Json?
+  // §20/§21 — off by default. With no real calendar-provider integration
+  // connected in this codebase (see interview-availability.ts's doc
+  // comment), this gate exists and is fully honored, but in practice every
+  // interview request resolves to MEETING_REQUEST_PENDING_APPROVAL today.
+  autonomousSchedulingEnabled Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  resumes      CareerResume[]
+  jobMatches   JobMatch[]
+  applications JobApplication[]
+  interviews   CareerInterview[]
+  followUps    CareerFollowUp[]
+
+  @@index([userId])
+  @@index([organizationId])
+}
+
+enum CareerProfileStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum CareerWorkMode {
+  REMOTE
+  HYBRID
+  ONSITE
+  ANY
+}
+
+enum CareerEmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  FREELANCE
+  INTERNSHIP
+  TEMPORARY
+}
+
+enum CareerRelocationPreference {
+  WILLING
+  UNWILLING
+  CONDITIONAL
+}
+
+// One row per real uploaded file — versions accumulate, never overwritten
+// (§8, §9: the original document is immutable). `extractedText` is the real
+// RAW_FACT layer; `aiExtractedProfile` is AI's structured guess over that
+// text (each top-level section honestly labeled with an overall confidence
+// — see career-resume-extraction.ts); `userVerifiedFields` tracks exactly
+// which CareerProfile fields the user has explicitly confirmed/edited from
+// this resume's AI output — the real USER_VERIFIED layer, distinct from
+// both of the others (§11, §14).
+model CareerResume {
+  id              String @id @default(cuid())
+  careerProfileId String
+  version         Int
+
+  originalFilename String
+  mimeType         String
+  sizeBytes        Int
+  // sha256 hex — real duplicate-upload detection (§22), never a second
+  // processing job kicked off for a byte-identical re-upload.
+  checksum         String
+  storageKey       String
+
+  status        CareerResumeStatus @default(UPLOADED)
+  failureReason String?            @db.Text
+
+  extractedText      String? @db.Text
+  aiExtractedProfile Json?
+  // HIGH | MEDIUM | LOW | UNKNOWN — overall, never per-nested-field (that
+  // granularity lives inside aiExtractedProfile's own skills array, same
+  // convention as Candidate.skillsExtracted's confidenceScore).
+  aiConfidence       String?
+  userVerifiedFields Json?
+
+  uploadedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  careerProfile               CareerProfile    @relation(fields: [careerProfileId], references: [id], onDelete: Cascade)
+  // Phase 20 — applications that selected THIS resume version as their
+  // source (never modified — see ApplicationDocument for the customized
+  // copy). SetNull, not Cascade: an application's history must survive
+  // even if the source resume is later deleted.
+  applicationsUsingThisResume JobApplication[] @relation("applicationsUsingThisResume")
+
+  @@index([careerProfileId, version])
+  @@index([careerProfileId, checksum])
+}
+
+enum CareerResumeStatus {
+  UPLOADED
+  VALIDATING
+  VALID
+  INVALID
+  PARSING
+  PARSED
+  AI_PROCESSING
+  PROCESSED
+  REVIEW_REQUIRED
+  VERIFIED
+  FAILED
+}
+
+enum CareerDiscoveryFrequency {
+  MANUAL_ONLY
+  DAILY
+  WEEKLY
+}
+
+// ===== Phase 19 (AI Job Discovery + Job Matching Engine) =====
+// Job is a GLOBAL, shared canonical record — a real external job posting is
+// the same real-world fact regardless of which user/org discovered it, so
+// (unlike every per-tenant model elsewhere in this schema) Job is
+// deliberately NOT organizationId-scoped: two users at two different
+// organizations who are both a match for the same real Remotive posting
+// share the SAME Job row, never a duplicate. Tenant/user-specific data
+// (score, evidence, shortlist status) lives on JobMatch instead.
+model Job {
+  id          String @id @default(cuid())
+  title       String
+  // The real, unmodified source title, kept separate from `title` (which
+  // may be lightly normalized — see job-normalization.ts) — §7: "preserve
+  // the original source data separately, do not silently alter source facts."
+  sourceTitle String
+
+  company       String
+  companyDomain String?
+
+  location String?
+  country  String?
+  city     String?
+  workMode CareerWorkMode?
+
+  description      String   @db.Text
+  // Structured: { required: string[], preferred: string[], optional: string[] }
+  // — real classification per §13, never inferred beyond what the source
+  // text actually states.
+  requirements     Json?
+  responsibilities String[]
+  technologies     String[]
+  industry         String?
+  careerLevel      String?
+
+  // Null = source didn't provide it — never estimated (§23).
+  salaryMin      Float?
+  salaryMax      Float?
+  salaryCurrency String?
+  salaryPeriod   String?
+
+  employmentType     CareerEmploymentType?
+  // Years, null = not stated by the source.
+  experienceMinYears Int?
+  experienceMaxYears Int?
+
+  status CareerJobStatus @default(DISCOVERED)
+
+  postingDate DateTime?
+  closingDate DateTime?
+  firstSeenAt DateTime  @default(now())
+  lastSeenAt  DateTime  @default(now())
+
+  // The real, canonical dedup identity — a job with no canonicalUrl can
+  // only be deduped via the secondary company+title+location+description
+  // signals (job-deduplication.ts), never merged blindly.
+  canonicalUrl String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sourceRecords JobSourceRecord[]
+  matches       JobMatch[]
+  applications  JobApplication[]
+
+  @@index([status])
+  @@index([company])
+  @@index([lastSeenAt])
+}
+
+// One row per real fetch from a real provider — preserved even after
+// dedup, so a Job's full source provenance (§6, §9) is never lost. A
+// re-fetch of the same real job from the same provider updates
+// lastSeenAt on this row rather than creating a duplicate.
+model JobSourceRecord {
+  id          String @id @default(cuid())
+  jobId       String
+  provider    String
+  sourceJobId String
+  sourceUrl   String
+  // The real, minimally-processed payload fields this provider returned —
+  // kept for genuine traceability ("where did this job come from?"), not
+  // the full raw JSON (§42 — respect provider storage/retention terms).
+  rawSnapshot Json
+
+  discoveredAt DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, sourceJobId])
+  @@index([jobId])
+}
+
+// Real, deterministic per-user match — one row per (CareerProfile, Job).
+// `dimensions`/`explanation` are the real, computed evidence trail (§16-30)
+// — the AI layer (career-agent job explanations) may only ADD prose
+// explaining these real, pre-computed dimensions, never invent a
+// dimension or override a deterministic result (§30).
+model JobMatch {
+  id              String @id @default(cuid())
+  careerProfileId String
+  jobId           String
+  organizationId  String
+
+  overallScore Int // 0-100, deterministic — see job-matching.ts's documented weights
+  // { skill, experience, role, industry, location, salary, technology,
+  //   careerLevel, preference } — each { status: MATCHED|PARTIAL|MISSING|
+  //   MISMATCH|CONFLICT|UNKNOWN, evidence: string[] }. Real structured
+  // evidence, never a bare number with no explanation (§17, §29).
+  dimensions   Json
+
+  eligibility CareerJobEligibility @default(UNKNOWN)
+
+  // { whyMatched: string[], whatIsMissing: string[], whatIsRisky: string[],
+  //   whatShouldBeCustomized: string[] } — every entry traceable to a real
+  // dimension above, never a free-floating AI claim (§28).
+  explanation Json?
+
+  status    CareerJobStatus @default(DISCOVERED)
+  userNotes String?         @db.Text
+
+  computedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  careerProfile CareerProfile   @relation(fields: [careerProfileId], references: [id], onDelete: Cascade)
+  job           Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // Phase 20 — at most one JobApplication ever originates from a given
+  // match (a match may exist with no application yet — SHORTLISTED never
+  // implies PREPARING started).
+  application   JobApplication?
+
+  @@unique([careerProfileId, jobId])
+  @@index([careerProfileId, status])
+  @@index([organizationId])
+}
+
+enum CareerJobStatus {
+  DISCOVERED
+  MATCHED
+  SHORTLISTED
+  NOT_MATCHED
+  REVIEW_REQUIRED
+  CLOSED
+  EXPIRED
+  REMOVED
+  UNKNOWN
+}
+
+enum CareerJobEligibility {
+  LIKELY_ELIGIBLE
+  POSSIBLE
+  REVIEW_REQUIRED
+  LIKELY_NOT_ELIGIBLE
+  UNKNOWN
+}
+
+// One row per real discovery execution — real observability (§36), never
+// a fabricated "completed successfully" when a provider actually failed.
+model JobDiscoveryRun {
+  id              String                 @id @default(cuid())
+  careerProfileId String
+  organizationId  String
+  provider        String
+  triggeredBy     CareerDiscoveryTrigger
+
+  status          CareerDiscoveryRunStatus @default(RUNNING)
+  resultCount     Int                      @default(0)
+  newJobsCount    Int                      @default(0)
+  duplicatesCount Int                      @default(0)
+  matchedCount    Int                      @default(0)
+  rateLimited     Boolean                  @default(false)
+  errorMessage    String?                  @db.Text
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@index([careerProfileId, startedAt])
+  @@index([organizationId])
+}
+
+enum CareerDiscoveryTrigger {
+  MANUAL
+  SCHEDULED
+}
+
+enum CareerDiscoveryRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+  RATE_LIMITED
+  NOT_CONFIGURED
+}
+
+// ============================================================================
+// Phase 20 — Autonomous AI Job Application Agent
+//
+// Extends the Phase 18 (CareerProfile/CareerResume) and Phase 19
+// (Job/JobMatch/JobDiscoveryRun) foundations. Deliberately does NOT create a
+// new Candidate, Audit, Notification, or Email model — this phase's own
+// audit trail reuses the existing AuditLog (via logAudit, see
+// application-actions.ts), notifications reuse Notification (via
+// notifyUser), and any real recruiter/hiring-manager email reuses the
+// existing EmailDraft → sendOutreachEmail → Resend-webhook pipeline
+// (Phase 3/4/17) end-to-end, including its real deliveredAt confirmation —
+// see application-submission.ts's doc comment for why.
+// ============================================================================
+
+enum ApplicationStatus {
+  DISCOVERED
+  MATCHED
+  SHORTLISTED
+  PREPARING
+  READY_FOR_REVIEW
+  USER_APPROVAL_REQUIRED
+  // §15/§47 — the real, honest outcome whenever no genuinely authorized
+  // submission path exists (no configured provider API/integration, and no
+  // real, extracted application email) — the application is still fully
+  // PREPARED, just not auto-submitted (§47: prepare + notify + request
+  // user action, never silently drop it).
+  PLATFORM_RESTRICTED
+  SUBMITTING
+  SUBMITTED
+  // §32/§56 — real submission happened but no confirmation evidence exists
+  // yet (e.g. email accepted by the provider but not yet delivered).
+  SUBMITTED_UNCONFIRMED
+  CONFIRMED
+  FAILED
+  // §31/§56 — a submission attempt's true outcome is genuinely unknown
+  // (e.g. provider timeout after the request may have been accepted) —
+  // never auto-retried; requires a real status lookup or human review.
+  FAILED_REQUIRES_REVIEW
+  REJECTED
+  WITHDRAWN
+  INTERVIEW
+  OFFER
+  CLOSED
+}
+
+enum ApplicationAutomationMode {
+  DISCOVERY_ONLY
+  AI_PREPARE
+  APPLY_WITH_APPROVAL
+  AUTO_APPLY_APPROVED
+  FULL_AUTONOMOUS
+}
+
+// §6 — deliberately a superset of JobMatch's own CareerJobEligibility
+// (which only judges the JOB-MATCH dimensions): this one judges whether
+// the APPLICATION itself has everything required to actually apply
+// (documents present, required answers available, information verified).
+enum ApplicationEligibilityStatus {
+  ELIGIBLE
+  LIKELY_ELIGIBLE
+  REVIEW_REQUIRED
+  LIKELY_NOT_ELIGIBLE
+  NOT_ELIGIBLE
+  UNKNOWN
+}
+
+enum ApplicationDuplicateStatus {
+  NO_DUPLICATE
+  DUPLICATE_CONFIRMED
+  POSSIBLE_DUPLICATE
+  UNKNOWN
+}
+
+enum ApplicationSubmissionMethod {
+  API
+  AUTHORIZED_BROWSER
+  EMPLOYER_PORTAL
+  USER_ACTION_REQUIRED
+  EMAIL
+  OTHER_SUPPORTED_INTEGRATION
+}
+
+enum ApplicationAnswerSource {
+  USER_VERIFIED
+  RESUME
+  CAREER_PROFILE
+  USER_PREFERENCE
+  JOB_SOURCE
+  USER_INPUT
+  UNKNOWN
+}
+
+enum ApplicationAnswerStatus {
+  VERIFIED
+  REVIEW_REQUIRED
+  USER_INPUT_REQUIRED
+}
+
+enum ApplicationDocumentType {
+  CUSTOMIZED_RESUME
+  COVER_LETTER
+  RECRUITER_EMAIL
+  HIRING_MANAGER_EMAIL
+  LINKEDIN_DRAFT
+  PORTFOLIO_SELECTION
+}
+
+enum ApplicationSuspicionStatus {
+  NOT_SUSPICIOUS
+  SUSPICIOUS
+  REVIEW_REQUIRED
+  UNKNOWN
+}
+
+enum ApplicationValidationResult {
+  READY
+  BLOCKED
+  REVIEW_REQUIRED
+}
+
+// One row per real (CareerProfile, Job) application — §5/§51 the
+// @@unique constraint below IS the database-level duplicate-application
+// guard the spec requires; application-level duplicate detection
+// (application-duplicate.ts) only ever needs to check "does a row already
+// exist", never re-implement the identity logic Job dedup already solved.
+model JobApplication {
+  id              String  @id @default(cuid())
+  organizationId  String
+  userId          String
+  careerProfileId String
+  jobId           String
+  // Nullable: an application can in principle be created directly from a
+  // Job without a precomputed JobMatch (defensive), though the real flow
+  // always goes JobMatch -> application.
+  jobMatchId      String? @unique
+
+  status                   ApplicationStatus         @default(DISCOVERED)
+  // Snapshot of the automation mode that governed this application at
+  // creation time — real audit value, never recomputed from the profile's
+  // CURRENT (possibly since-changed) setting.
+  automationModeAtCreation ApplicationAutomationMode
+
+  duplicateStatus ApplicationDuplicateStatus @default(UNKNOWN)
+
+  eligibilityStatus ApplicationEligibilityStatus @default(UNKNOWN)
+  // { checks: [{ requirement: string, status: string, evidence: string }] }
+  // — real, itemized, never a bare label (§6, §7).
+  eligibilityDetail Json?
+
+  suspicionStatus   ApplicationSuspicionStatus @default(UNKNOWN)
+  suspicionEvidence String[]                   @default([])
+
+  selectedResumeId     String?
+  selectedResumeReason String? @db.Text
+
+  validationResult ApplicationValidationResult?
+  // { checks: [{ name: string, passed: boolean, detail: string }] } (§14)
+  validationDetail Json?
+  // { conditions: [{ name: string, passed: boolean, detail: string }],
+  //   decision: string } — the real, itemized autonomy safety gate result
+  // (§22, §48) — every one of the 16 conditions, always recorded, never
+  // just a final yes/no.
+  policyDecision   Json?
+  blockedReason    String?                      @db.Text
+
+  submissionMethod       ApplicationSubmissionMethod?
+  // Real idempotency key (§30/§51) — generated once, immediately before a
+  // genuine submission attempt, and reused on any safe retry of the SAME
+  // attempt so a provider-side dedup (or our own webhook correlation) can
+  // recognize a re-delivered response instead of creating a second send.
+  submissionAttemptId    String?                      @unique
+  providerRequestId      String?
+  providerConfirmationId String?
+  retryCount             Int                          @default(0)
+  lastError              String?                      @db.Text
+
+  approvedByUserId    String?
+  approvedAt          DateTime?
+  submittingAt        DateTime?
+  submittedAt         DateTime?
+  confirmedAt         DateTime?
+  rejectedAt          DateTime?
+  withdrawnAt         DateTime?
+  withdrawReason      String?   @db.Text
+  closedAt            DateTime?
+  interviewDetectedAt DateTime?
+  offerDetectedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  careerProfile  CareerProfile            @relation(fields: [careerProfileId], references: [id], onDelete: Cascade)
+  job            Job                      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  jobMatch       JobMatch?                @relation(fields: [jobMatchId], references: [id], onDelete: SetNull)
+  selectedResume CareerResume?            @relation("applicationsUsingThisResume", fields: [selectedResumeId], references: [id], onDelete: SetNull)
+  answers        ApplicationAnswer[]
+  documents      ApplicationDocument[]
+  // ===== Phase 21 =====
+  communications RecruiterCommunication[]
+  interviews     CareerInterview[]
+  followUps      CareerFollowUp[]
+
+  @@unique([careerProfileId, jobId])
+  @@index([organizationId, status])
+  @@index([userId])
+  @@index([careerProfileId, status])
+}
+
+// §12/§13/§38 — one row per real application-form question. Every answer
+// carries its own provenance and verification status; a question this
+// codebase cannot honestly answer from real, verified data gets
+// USER_INPUT_REQUIRED, never a guess.
+model ApplicationAnswer {
+  id            String                  @id @default(cuid())
+  applicationId String
+  question      String                  @db.Text
+  answer        String?                 @db.Text
+  source        ApplicationAnswerSource @default(UNKNOWN)
+  status        ApplicationAnswerStatus @default(REVIEW_REQUIRED)
+  // §13 — work authorization, sponsorship, disability, veteran status,
+  // legal declarations, citizenship/visa. Never auto-answered regardless
+  // of automation mode.
+  isSensitive   Boolean                 @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  application JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId])
+}
+
+// §9/§10/§11/§27 — one row per real generated artifact (customized resume,
+// cover letter, recruiter/hiring-manager email draft, LinkedIn draft,
+// portfolio selection). Every row is a new, versioned, traceable document —
+// the original CareerResume is NEVER overwritten (§9).
+model ApplicationDocument {
+  id                  String                  @id @default(cuid())
+  applicationId       String
+  type                ApplicationDocumentType
+  version             Int                     @default(1)
+  // Set for a stored file (e.g. a customized-resume PDF via the existing
+  // career-resumes storage primitive); null for text-only documents
+  // (content below covers those).
+  storageKey          String?
+  content             String?                 @db.Text
+  // Which real CareerResume.version this was derived from — traceability
+  // (§9) back to the immutable original.
+  sourceResumeVersion Int?
+  // §10 — real fabrication-detection result: { unsupportedClaims: string[],
+  // blocked: boolean }. A document with blocked=true must never be used in
+  // a submission (validation-engine.ts enforces this).
+  validationResult    Json?
+  // Correlates a RECRUITER_EMAIL/HIRING_MANAGER_EMAIL document to the real
+  // EmailDraft it was sent through (EmailDraft.resendMessageId) — lets the
+  // EXISTING Resend webhook's deliveredAt signal double as this
+  // application's real confirmation evidence, with zero new webhook code.
+  providerMessageId   String?                 @unique
+
+  createdAt DateTime @default(now())
+
+  application JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, type])
+}
+
+// ============================= Phase 21: Recruiter Communication + Interview Automation =============================
+// Reuses Phase 17's Contact/Reply/EmailDraft pipeline wholesale (§3, §64):
+// a "recruiter" IS a Contact (Phase 20's application-submission.ts already
+// finds-or-creates one per real recruiter email, tagged "career-application"
+// — this phase adds nothing new for recruiter identity itself, per §5's own
+// explicit "do not create duplicate person records"). A "recruiter email"
+// IS a Reply, captured by the real, existing KVL IMAP reply-sync job
+// (kvl-reply-sync-job.ts) or the manual logReply form — this phase adds
+// nothing new for email capture/threading either (§3, §28, §64).
+//
+// What's genuinely new: RecruiterCommunication is the real classification +
+// extraction + application-matching LAYER on top of an existing Reply (one
+// row per Reply whose Contact is tagged "career-application" — every other
+// org's ordinary sales Reply is never touched). CareerInterview is a new
+// entity because the existing `Interview` model (KVL's own internal ATS,
+// hiring candidates FOR KVL against JobOpening/Candidate) is a genuinely
+// different bounded context than a GrowthOS user's own personal interview
+// as a job-seeker — reusing it would incorrectly mix KVL's own hiring
+// pipeline with its users' job searches. CareerFollowUp is new because the
+// existing Campaign/Sequence follow-up engine is Contact+Campaign shaped
+// (bulk outreach), not Application-shaped (one applicant, one job, real
+// day-offset gates re-checked at send time per §58).
+
+enum RecruiterMessageMatchStatus {
+  MATCHED
+  POSSIBLE_MATCH
+  UNMATCHED
+  AMBIGUOUS
+}
+
+enum RecruiterMessageClassificationType {
+  INTERVIEW_REQUEST
+  SCREENING
+  MORE_INFORMATION
+  REJECTED
+  OFFER
+  SALARY_DISCUSSION
+  AVAILABILITY_REQUEST
+  DOCUMENT_REQUEST
+  FOLLOW_UP
+  GENERAL_RESPONSE
+  UNKNOWN
+}
+
+enum ClassificationConfidenceLevel {
+  HIGH
+  MEDIUM
+  LOW
+  UNKNOWN
+}
+
+enum NextActionType {
+  NO_ACTION
+  CHECK_CALENDAR
+  USER_APPROVAL_REQUIRED
+  REPLY_REQUIRED
+  PROVIDE_INFORMATION
+  UPLOAD_DOCUMENT
+  SCHEDULE_INTERVIEW
+  REQUEST_ALTERNATIVE
+  FOLLOW_UP
+  REVIEW_OFFER
+  REVIEW_REJECTION
+  UNKNOWN
+}
+
+// One row per real Reply that has gone through career classification (§6,
+// §7, §8, §38, §39). Never created for a non-career Reply.
+model RecruiterCommunication {
+  id             String  @id @default(cuid())
+  organizationId String
+  replyId        String  @unique
+  // Nullable until real matching evidence resolves it (§4) — a
+  // POSSIBLE_MATCH/AMBIGUOUS/UNMATCHED row genuinely has no applicationId.
+  applicationId  String?
+
+  matchStatus   RecruiterMessageMatchStatus @default(UNMATCHED)
+  // Which real signal decided the match — e.g. "THREAD_REFERENCE",
+  // "SINGLE_APPLICATION_FOR_CONTACT", "MULTIPLE_APPLICATIONS_FOR_CONTACT" —
+  // never a bare boolean (§4 evidence requirement).
+  matchEvidence String?                     @db.Text
+
+  classification           RecruiterMessageClassificationType @default(UNKNOWN)
+  classificationConfidence ClassificationConfidenceLevel      @default(UNKNOWN)
+  // Real quoted excerpt(s) the classification was actually based on (§7).
+  classificationEvidence   String?                            @db.Text
+
+  // §8 structured extraction — { company, role, recruiter, date, time,
+  // timezone, meetingLink, phone, documents: string[], questions: string[],
+  // salary, nextAction }. Each populated field carries its own
+  // { value, source: "EMAIL_TEXT", confidence } shape; a field genuinely
+  // absent from the email is omitted, never guessed.
+  extraction Json @default("{}")
+
+  nextAction     NextActionType @default(UNKNOWN)
+  // §7 — LOW confidence or ambiguous extraction routes here; sensitive
+  // questions (§13, §46) always route here regardless of confidence.
+  reviewRequired Boolean        @default(false)
+  isSensitive    Boolean        @default(false)
+
+  // §37 — a human overriding the AI classification is a real, auditable event.
+  // The original AI classification above is NEVER overwritten by this —
+  // manualClassification is a separate, additive field.
+  manualClassification       RecruiterMessageClassificationType?
+  manuallyClassifiedByUserId String?
+  manuallyClassifiedAt       DateTime?
+
+  createdAt DateTime @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  reply        Reply           @relation(fields: [replyId], references: [id], onDelete: Cascade)
+  application  JobApplication? @relation(fields: [applicationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([applicationId])
+}
+
+enum CareerInterviewStatus {
+  REQUESTED
+  PENDING_APPROVAL
+  SCHEDULED
+  RESCHEDULE_REQUESTED
+  RESCHEDULED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  UNKNOWN
+}
+
+enum InterviewDecisionType {
+  ACCEPT
+  REJECT
+  SUGGEST_ALTERNATIVE
+  REQUEST_ANOTHER_SLOT
+}
+
+// A GrowthOS user's OWN interview as a job-seeker — deliberately distinct
+// from the existing `Interview` model (KVL's internal ATS, see the block
+// doc comment above). One JobApplication may have multiple rows (§2, §27).
+model CareerInterview {
+  id                    String  @id @default(cuid())
+  organizationId        String
+  careerProfileId       String
+  applicationId         String
+  // The RecruiterCommunication whose real extraction produced this
+  // interview record (§10: "only create an Interview record from actual
+  // evidence"). Null only for a manually-created row.
+  sourceCommunicationId String? @unique
+
+  status CareerInterviewStatus @default(REQUESTED)
+  stage  String?
+
+  // §54 timezone safety — the ORIGINAL extracted strings are kept verbatim
+  // alongside the normalized UTC instant; normalization never discards the
+  // source values.
+  localDate       String?
+  localTime       String?
+  timezone        String?
+  scheduledAtUtc  DateTime?
+  durationMinutes Int?
+
+  meetingLink      String?
+  phone            String?
+  interviewerName  String?
+  notes            String? @db.Text
+  // §49 — { facts: string[] (grounded in real job/company/profile data),
+  // likelyTopics: string[], potentialQuestions: string[], candidateQuestions:
+  // string[], highlightExperience: string[] } — every AI-generated field
+  // explicitly labeled "Likely"/"Potential", never a certainty claim.
+  preparationNotes Json?
+
+  // §52/§53/§55 — honestly NULL/NOT_CONNECTED in this codebase today (no
+  // Google/Microsoft Calendar OAuth or Cal.com/Calendly booking API is
+  // wired anywhere — see interview-availability.ts's doc comment). Fields
+  // exist now so a future real calendar integration has somewhere real to
+  // write without a schema change.
+  calendarProvider   String?
+  calendarEventId    String?
+  calendarSyncStatus String  @default("NOT_CONNECTED")
+  // §53 idempotency key — set once, before any real scheduling side effect,
+  // reused on retry so reprocessing the same source communication/decision
+  // never creates a duplicate interview record.
+  idempotencyKey     String? @unique
+
+  decision         InterviewDecisionType?
+  decisionByUserId String?
+  decisionAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  careerProfile CareerProfile  @relation(fields: [careerProfileId], references: [id], onDelete: Cascade)
+  application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([applicationId])
+  @@index([careerProfileId, status])
+}
+
+enum CareerFollowUpStatus {
+  PENDING
+  SENT
+  CANCELLED
+  SKIPPED
+}
+
+// §40/§41/§58 — one row per real scheduled follow-up touchpoint for one
+// application. dayOffset/scheduledFor are computed once from the profile's
+// CURRENT followUpIntervalDays at creation time (a later policy change
+// only affects follow-ups scheduled after that change, never rewrites
+// already-scheduled rows silently).
+model CareerFollowUp {
+  id              String @id @default(cuid())
+  organizationId  String
+  careerProfileId String
+  applicationId   String
+
+  dayOffset        Int
+  scheduledFor     DateTime
+  status           CareerFollowUpStatus @default(PENDING)
+  // Which real §41 stopping condition fired, when status ends up
+  // CANCELLED/SKIPPED — never a bare boolean.
+  cancelReason     String?
+  sentEmailDraftId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  careerProfile CareerProfile  @relation(fields: [careerProfileId], references: [id], onDelete: Cascade)
+  application   JobApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@unique([applicationId, dayOffset])
+  @@index([organizationId, status, scheduledFor])
+}
+
+// ============================= Phase 22: Career Learning + Job Market Intelligence =============================
+// Career OUTCOME learning (Parts 3-24, 39-50) deliberately has NO new event
+// table here — per the spec's own Part 5 ("do not duplicate Application/
+// Event systems if existing records already provide this information"),
+// every real outcome fact already exists on JobApplication (full status
+// timeline + timestamps), Job, JobMatch, CareerResume, CareerInterview and
+// RecruiterCommunication — src/lib/career/outcome-analytics.ts computes
+// directly from those real rows. LearningRecommendation above is reused
+// as-is for career recommendations (see its own doc comment). The revenue
+// LearningObservation/LearningPattern/LearningShadowScore/LearningEngineState
+// models are deliberately NOT extended/reused for career outcomes: their
+// shape (dealSize, salesCycleDays, decisionMakerRole, leadSource, a single
+// WON/LOST-shaped LearningOutcome enum) is genuinely revenue-pipeline-
+// specific, and retrofitting it would be a far riskier, murkier schema
+// change than the direct-computation approach above.
+//
+// JOB MARKET intelligence (Parts 25-34, 51-53) is a genuinely different
+// concern — periodic aggregate snapshots of the GLOBAL `Job` table, not
+// per-user outcomes — and no existing model fits: MarketTrendSnapshot is
+// AI-web-search-derived qualitative business/competitor trend text,
+// org-scoped and shaped for a different purpose entirely. JobMarketSnapshot
+// is new (Part 57 explicitly permits this when no equivalent exists) and,
+// like `Job` itself, deliberately NOT organizationId-scoped — a real
+// snapshot of the shared job market is the same fact for every org.
+model JobMarketSnapshot {
+  id String @id @default(cuid())
+
+  // Real provider name(s) this snapshot's job population was drawn from
+  // (e.g. "Remotive") — Part 26/53 source-identification requirement.
+  sources    String[]
+  // Real geography SCOPE this snapshot honestly represents — e.g. "Global"
+  // when the underlying Job rows have no reliable country breakdown, or a
+  // specific country/region when they do. Never a fabricated narrower
+  // scope than the data actually supports (Part 26).
+  geography  String
+  sampleSize Int
+
+  collectionPeriodStart DateTime
+  collectionPeriodEnd   DateTime
+
+  // Each Json is a real, computed { key: string, jobCount: int, percentage:
+  // float }[] distribution over the sampled Job rows — never an invented
+  // ranking (Parts 27, 29, 31-34).
+  skillDistribution      Json @default("[]")
+  technologyDistribution Json @default("[]")
+  roleDistribution       Json @default("[]")
+  industryDistribution   Json @default("[]")
+  workModeDistribution   Json @default("[]")
+  locationDistribution   Json @default("[]")
+  experienceDistribution Json @default("[]")
+  // { role: string|null, currency: string, period: string, count: int,
+  //   min: float, max: float, median: float }[] — SOURCE-PROVIDED salary
+  // observations only (Job.salaryMin/Max are never null-filled or
+  // estimated here) — Part 30's SOURCE_PROVIDED_SALARY vs ESTIMATED_RANGE
+  // distinction; this snapshot only ever populates the former.
+  salaryObservations     Json @default("[]")
+
+  // HIGH/MEDIUM/LOW/UNKNOWN — Part 53, based on real, documented criteria
+  // (sample size + provider count) in market-intelligence.ts, never
+  // invented.
+  sourceQuality String @default("UNKNOWN")
+
+  createdAt DateTime @default(now())
+
+  @@index([geography, createdAt])
+  @@index([createdAt])
+}
+
+// ============================================================
+// PHASE 23 — Unified AI Agent Governance
+// ============================================================
+// The one genuinely new cross-cutting primitive this phase adds (see the
+// Phase 23 final report, section E/F): before this, AIAgentInstance
+// (Business/Executive Board) tracked only a live, overwritten-in-place
+// status per org+type singleton — no per-execution history existed
+// anywhere, and the Career engine's direct generateStructured/generateText
+// calls (career-agent.ts, resume-customization.ts, etc) had NO run
+// tracking at all. AgentRun is a thin, generic execution-trace row that
+// both engines can write to — NOT a second AI runtime (the actual model
+// calls still go through src/lib/ai/fallback.ts exactly as before) and NOT
+// a duplicate of AgentMemory (that's persistent knowledge; this is a
+// per-call audit/observability record, matching AuditLog's existing
+// tenant-scoped, redacted-content convention rather than inventing a new
+// one).
+enum AgentDomain {
+  BUSINESS
+  CAREER
+}
+
+enum AgentRunStatus {
+  REQUESTED
+  EXECUTING
+  COMPLETED
+  FAILED
+  BLOCKED
+}
+
+model AgentRun {
+  id             String @id @default(cuid())
+  organizationId String
+  userId         String?
+
+  domain AgentDomain
+  // Stable string key identifying which real function executed this run
+  // (e.g. "career-agent-chat", "career-resume-customization",
+  // "executive-agent-turn:SALES") — deliberately NOT a foreign key to
+  // AIAgentInstance, since most Career-engine call sites have no
+  // AIAgentInstance row at all (that model is Executive-Board-specific: one
+  // row per org+type).
+  agentKey String
+
+  tools Json @default("[]")
+
+  // A short, non-sensitive description of what was asked/produced — never
+  // the raw prompt or the full generated content (resume text, recruiter
+  // email body, etc). The real content already lives in its own real model
+  // (CareerResume, ApplicationDocument, EmailDraft, ...); this is a
+  // governance trace, not a second copy.
+  inputSummary  String @db.Text
+  outputSummary String? @db.Text
+
+  status     AgentRunStatus @default(REQUESTED)
+  confidence Float?
+  errorMessage String? @db.Text
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+  durationMs  Int?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, domain, createdAt])
+  @@index([organizationId, agentKey])
+  @@index([status])
 }

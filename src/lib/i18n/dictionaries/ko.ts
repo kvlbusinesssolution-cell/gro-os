@@ -5,6 +5,7 @@ export const ko: Dictionary = {
   "nav.aiCommandCenter": "AI 커맨드 센터",
   "nav.board": "AI 경영진 위원회",
   "nav.companies": "기업",
+  "nav.career": "커리어",
   "nav.companyDiscovery": "기업 발굴",
   "nav.opportunities": "AI 기회",
   "nav.priorityQueue": "AI 우선순위 대기열",
