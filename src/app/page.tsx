@@ -4,6 +4,7 @@ import { NavbarWithSession as Navbar } from "@/components/sections/navbar-with-s
 import { Hero } from "@/components/sections/hero";
 import { AIAgents } from "@/components/sections/ai-agents";
 import { Workflow } from "@/components/sections/workflow";
+import { CareerAgentSection } from "@/components/sections/career-agent";
 import { RoiCalculator } from "@/components/sections/roi-calculator";
 import { CTA } from "@/components/sections/cta";
 import { Footer } from "@/components/sections/footer";
@@ -30,6 +31,9 @@ export default function Home() {
           <AIAgents />
         </div>
         <Workflow />
+        <div id="career-agent">
+          <CareerAgentSection />
+        </div>
         <div id="roi-calculator">
           <RoiCalculator />
         </div>
