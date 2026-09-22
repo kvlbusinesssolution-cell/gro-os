@@ -85,6 +85,41 @@ describe("submitApplicationViaEmail — §56 mandatory partial-submission scenar
     expect(result.outcome).toBe("UNCERTAIN");
   });
 
+  it("Phase 31 — a real provider TIMEOUT thrown mid-send is treated identically to any other mid-flight exception: UNCERTAIN, never a blind retry, never a false SENT/FAILED", async () => {
+    // Real shape a fetch/AbortController timeout actually throws — not a
+    // generic Error, to prove the UNCERTAIN path isn't accidentally
+    // keyed to a specific Error subclass/message.
+    const timeoutError = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    sendQueuedDraftCoreMock.mockRejectedValueOnce(timeoutError);
+
+    const result = await submitApplicationViaEmail({
+      organizationId: orgId,
+      applicationId: "app-timeout-1",
+      recipientEmail: `recruiter-timeout-${Date.now()}@example.com`,
+      subject: "Application: Senior React Developer",
+      body: "I am applying for this role.",
+      candidateUserId: "user-1",
+    });
+
+    expect(result.outcome).toBe("UNCERTAIN");
+  });
+
+  it("Phase 31 — a provider response explicitly classified as network_timeout is real, end-to-end retryable via the FAILED path (not just at the isRetryableError unit level)", async () => {
+    sendQueuedDraftCoreMock.mockResolvedValueOnce({ ok: false, error: "Provider request timed out.", errorKind: "network_timeout" });
+
+    const result = await submitApplicationViaEmail({
+      organizationId: orgId,
+      applicationId: "app-timeout-2",
+      recipientEmail: `recruiter-timeout2-${Date.now()}@example.com`,
+      subject: "Application: Senior React Developer",
+      body: "I am applying for this role.",
+      candidateUserId: "user-1",
+    });
+
+    expect(result.outcome).toBe("FAILED");
+    if (result.outcome === "FAILED") expect(result.retryable).toBe(true);
+  });
+
   it("returns SENT with a real providerMessageId when the send genuinely succeeds", async () => {
     sendQueuedDraftCoreMock.mockImplementationOnce(async (organizationId: string, draftId: string) => {
       await prisma.emailDraft.update({ where: { id: draftId }, data: { status: "SENT", sentAt: new Date(), resendMessageId: "resend_msg_real_123" } });

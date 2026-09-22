@@ -10412,6 +10412,14 @@ model JobApplication {
   // { checks: [{ requirement: string, status: string, evidence: string }] }
   // — real, itemized, never a bare label (§6, §7).
   eligibilityDetail Json?
+  // Phase 31 — a real CareerPrediction (career-predictions.ts,
+  // predictMatchResponseLikelihood) captured at prepare time: this job's
+  // real Phase-19 fit score surfaced ALONGSIDE a real historical
+  // response-rate likelihood for comparable past applications. Purely
+  // informational — never used to gate/block anything in the policy
+  // engine, and honestly INSUFFICIENT_DATA when the real sample is too
+  // small, never a guessed number.
+  matchPrediction   Json?
 
   suspicionStatus   ApplicationSuspicionStatus @default(UNKNOWN)
   suspicionEvidence String[]                   @default([])
@@ -10424,8 +10432,9 @@ model JobApplication {
   validationDetail Json?
   // { conditions: [{ name: string, passed: boolean, detail: string }],
   //   decision: string } — the real, itemized autonomy safety gate result
-  // (§22, §48) — every one of the 16 conditions, always recorded, never
-  // just a final yes/no.
+  // (§22, §48) — every one of the 11 real conditions in
+  // evaluateAutonomySafetyGate (application-policy-engine.ts), always
+  // recorded, never just a final yes/no.
   policyDecision   Json?
   blockedReason    String?                      @db.Text
 
@@ -10515,9 +10524,13 @@ model ApplicationDocument {
   // Which real CareerResume.version this was derived from — traceability
   // (§9) back to the immutable original.
   sourceResumeVersion Int?
-  // §10 — real fabrication-detection result: { unsupportedClaims: string[],
-  // blocked: boolean }. A document with blocked=true must never be used in
-  // a submission (validation-engine.ts enforces this).
+  // §10 — real fabrication-detection result. For CUSTOMIZED_RESUME:
+  // { unsupportedClaims: string[], blocked: boolean } — blocked=true must
+  // never be used in a submission (validation-engine.ts enforces this).
+  // For COVER_LETTER (Phase 31): { needsManualReview: boolean,
+  // suspiciousPhrases: string[] } — the same heuristic-flag-only pattern
+  // (cover-letter.ts's validateCoverLetter), never a hard block since
+  // free text can't be exact-matched like resume's structured fields.
   validationResult    Json?
   // Correlates a RECRUITER_EMAIL/HIRING_MANAGER_EMAIL document to the real
   // EmailDraft it was sent through (EmailDraft.resendMessageId) — lets the

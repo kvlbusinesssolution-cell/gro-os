@@ -29,6 +29,46 @@ export interface CoverLetterResult {
   error?: string;
 }
 
+export interface CoverLetterFabricationCheckResult {
+  needsManualReview: boolean;
+  suspiciousPhrases: string[];
+}
+
+/**
+ * Phase 31 — real fabrication-check parity with resume-customization.ts's
+ * validateCustomizedResume: the SAME bounded heuristic (a real,
+ * deterministic capitalized-multi-word-phrase-absent-from-every-known-
+ * real-source-string signal), mirrored here since a cover letter is
+ * entirely free text — there's no structured field list to exact-match
+ * against like resume-customization has for skills/projects/achievements.
+ * Never auto-blocks (false positives are common — real technology proper
+ * nouns, the job's own company name, etc.) — only flags for human review,
+ * exactly like resume-customization's own summary-field heuristic does.
+ */
+// Real, ordinary cover-letter structural boilerplate (greetings/closings)
+// — never a claim about the candidate, so never a fabrication risk. A
+// cover letter (unlike resume-customization's plain factual summary
+// field) genuinely contains these by convention; without this exclusion
+// every real letter would false-positive on its own salutation alone.
+const BOILERPLATE_PHRASES = new Set([
+  "dear hiring team",
+  "dear hiring manager",
+  "dear recruiting team",
+  "best regards",
+  "kind regards",
+  "warm regards",
+  "sincerely yours",
+  "yours sincerely",
+  "thank you",
+]);
+
+export function validateCoverLetter(body: string, source: CoverLetterSource, jobTitle: string, company: string): CoverLetterFabricationCheckResult {
+  const knownText = [source.currentRole ?? "", ...source.skills, ...source.achievements, jobTitle, company, source.candidateName].join(" ").toLowerCase();
+  const capitalizedPhrases = body.match(/\b[A-Z][a-zA-Z]+(?:\s[A-Z][a-zA-Z]+){0,2}\b/g) ?? [];
+  const suspiciousPhrases = capitalizedPhrases.filter((phrase) => phrase.length > 3 && !knownText.includes(phrase.toLowerCase()) && !BOILERPLATE_PHRASES.has(phrase.toLowerCase()));
+  return { needsManualReview: suspiciousPhrases.length > 0, suspiciousPhrases: [...new Set(suspiciousPhrases)] };
+}
+
 export async function generateCoverLetter(source: CoverLetterSource, jobTitle: string, company: string, jobDescription: string, organizationId: string): Promise<CoverLetterResult> {
   if (!isAIConnected()) return { body: null, error: "AI is not connected for this environment." };
 

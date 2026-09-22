@@ -48,9 +48,21 @@ export async function selectResumeForApplication(careerProfileId: string, jobReq
   const best = ranked[0];
   const reasons: string[] = [`Selected "${best.originalFilename}" (version ${best.version}, status ${best.status}) — the most recently processed, highest-confidence resume on file.`];
 
-  if (jobRequiredTechnologies.length > 0 && best.aiExtractedProfile && typeof best.aiExtractedProfile === "object") {
-    const profile = best.aiExtractedProfile as { skills?: Array<{ name?: string }> };
-    const skillNames = new Set((profile.skills ?? []).map((s) => (s.name ?? "").trim().toLowerCase()).filter(Boolean));
+  if (jobRequiredTechnologies.length > 0 && best.aiExtractedProfile && typeof best.aiExtractedProfile === "object" && !Array.isArray(best.aiExtractedProfile)) {
+    const profile = best.aiExtractedProfile as { skills?: unknown };
+    // §Phase 31 — a real, previously-unhandled malformed-resume crash:
+    // aiExtractedProfile.skills is trusted AI-extraction output, not a
+    // validated schema — a partial/corrupt extraction can genuinely leave
+    // it as a non-array value. Never assume its shape; a resume this
+    // malformed simply doesn't contribute a skill-overlap explanation
+    // rather than crashing the whole application-prepare pipeline.
+    const rawSkills = Array.isArray(profile.skills) ? profile.skills : [];
+    const skillNames = new Set(
+      rawSkills
+        .map((s) => (typeof s === "string" ? s : typeof s === "object" && s !== null ? ((s as { name?: unknown }).name ?? "") : ""))
+        .map((s) => (typeof s === "string" ? s.trim().toLowerCase() : ""))
+        .filter(Boolean),
+    );
     const overlap = jobRequiredTechnologies.filter((t) => skillNames.has(t.trim().toLowerCase()));
     if (overlap.length > 0) {
       reasons.push(`Contains ${overlap.length} of ${jobRequiredTechnologies.length} required technologies: ${overlap.join(", ")}.`);

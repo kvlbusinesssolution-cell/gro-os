@@ -61,4 +61,27 @@ describe("selectResumeForApplication — §8 real, explainable selection", () =>
     const result = await selectResumeForApplication(profileId, ["React", "GraphQL"]);
     expect(result.reason).toContain("React");
   });
+
+  it("Phase 31 — a malformed aiExtractedProfile.skills (not an array, e.g. a corrupted partial extraction) never crashes selection — it just skips the skill-overlap explanation", async () => {
+    await prisma.careerResume.deleteMany({ where: { careerProfileId: profileId } });
+    const malformed = await prisma.careerResume.create({
+      data: {
+        careerProfileId: profileId,
+        version: 1,
+        originalFilename: "malformed.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 100,
+        checksum: "c4",
+        storageKey: "k4",
+        status: "VERIFIED",
+        // Real malformed shape: skills as a string, not an array — a
+        // genuine failure mode of a partial/corrupt AI extraction.
+        aiExtractedProfile: { skills: "senior react developer with 5 years experience" } as object,
+      },
+    });
+
+    const result = await selectResumeForApplication(profileId, ["React"]);
+    expect(result.resumeId).toBe(malformed.id);
+    expect(result.reason).not.toContain("Contains");
+  });
 });

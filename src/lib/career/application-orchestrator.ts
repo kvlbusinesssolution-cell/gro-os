@@ -19,11 +19,12 @@ import { computeApplicationEligibility } from "./application-eligibility";
 import { detectSuspiciousJob } from "./suspicious-job-detection";
 import { selectResumeForApplication } from "./resume-selection";
 import { customizeResumeForJob, validateCustomizedResume, type SourceProfileForCustomization } from "./resume-customization";
-import { generateCoverLetter } from "./cover-letter";
+import { generateCoverLetter, validateCoverLetter } from "./cover-letter";
 import { prepareApplicationAnswer, type AnswerProfileInput } from "./application-answers";
 import { runValidationEngine } from "./application-validation";
 import { evaluateAutonomySafetyGate } from "./application-policy-engine";
 import { determineSubmissionMethod, submitApplicationViaEmail, checkEmailDeliveryConfirmation } from "./application-submission";
+import { predictMatchResponseLikelihood } from "./career-predictions";
 import type { JobMatchResult } from "./job-matching";
 
 const COMMON_QUESTIONS = [
@@ -68,6 +69,11 @@ export async function prepareApplicationCore(careerProfileId: string, jobMatchId
 
   const suspicion = detectSuspiciousJob({ description: job.description, company: job.company, companyDomain: job.companyDomain, canonicalUrl: job.canonicalUrl });
 
+  // Phase 31 — computed BEFORE this application's own row exists, so the
+  // real historical pool it queries can never self-pollute with the
+  // very application currently being prepared.
+  const matchPrediction = await predictMatchResponseLikelihood(organizationId, jobMatch.id);
+
   const application = await prisma.jobApplication.create({
     data: {
       organizationId,
@@ -80,6 +86,7 @@ export async function prepareApplicationCore(careerProfileId: string, jobMatchId
       duplicateStatus: duplicate.status,
       suspicionStatus: suspicion.status,
       suspicionEvidence: suspicion.evidence,
+      matchPrediction: matchPrediction as unknown as object,
     },
   });
   await logAudit({ userId, organizationId, action: "career:application:discovered", metadata: { applicationId: application.id, jobId: job.id, duplicateStatus: duplicate.status } });
@@ -109,7 +116,7 @@ export async function prepareApplicationCore(careerProfileId: string, jobMatchId
     hasVerifiedWorkAuthorization: null, // §13 — never assumed; no work-authorization field exists on CareerProfile today
   });
   await prisma.jobApplication.update({ where: { id: application.id }, data: { eligibilityStatus: eligibility.status, eligibilityDetail: eligibility.checks as unknown as object } });
-  await logAudit({ userId, organizationId, action: "career:application:eligibility_checked", metadata: { applicationId: application.id, status: eligibility.status } });
+  await logAudit({ userId, organizationId, action: "career:application:eligibility_checked", metadata: { applicationId: application.id, status: eligibility.status, matchPredictionInsufficientData: matchPrediction.insufficientData } });
 
   // ===== Resume selection (§8) =====
   const jobTech = job.technologies;
@@ -156,8 +163,14 @@ export async function prepareApplicationCore(careerProfileId: string, jobMatchId
       organizationId,
     );
     if (coverLetter.body) {
-      await prisma.applicationDocument.create({ data: { applicationId: application.id, type: "COVER_LETTER", content: coverLetter.body } });
-      await logAudit({ userId, organizationId, action: "career:application:cover_letter_generated", metadata: { applicationId: application.id } });
+      // Phase 31 — real fabrication-check parity with the customized
+      // resume above: heuristic-flag only, never a hard block (free text
+      // can't be exact-matched like structured resume fields).
+      const coverLetterCheck = validateCoverLetter(coverLetter.body, { candidateName: profile.name, currentRole: profile.currentRole, yearsOfExperience: profile.yearsOfExperience, skills: source.skills, achievements: source.achievements }, job.title, job.company);
+      await prisma.applicationDocument.create({
+        data: { applicationId: application.id, type: "COVER_LETTER", content: coverLetter.body, validationResult: { needsManualReview: coverLetterCheck.needsManualReview, suspiciousPhrases: coverLetterCheck.suspiciousPhrases } as object },
+      });
+      await logAudit({ userId, organizationId, action: "career:application:cover_letter_generated", metadata: { applicationId: application.id, needsManualReview: coverLetterCheck.needsManualReview } });
     }
   }
 

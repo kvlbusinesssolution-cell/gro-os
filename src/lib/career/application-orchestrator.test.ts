@@ -109,6 +109,16 @@ describe("application orchestrator — real end-to-end pipeline + tenant isolati
     expect(application.selectedResumeId).toBeTruthy();
     expect(application.duplicateStatus).toBe("NO_DUPLICATE");
 
+    // Phase 31 — real match-to-response prediction, surfaced alongside
+    // the real Phase-19 fit score, honestly INSUFFICIENT_DATA since this
+    // profile has zero prior real applications to blend a rate from.
+    const matchPrediction = application.matchPrediction as { kind: string; fitScore: number | null; insufficientData: boolean; denominator: number } | null;
+    expect(matchPrediction).not.toBeNull();
+    expect(matchPrediction?.kind).toBe("PREDICTION");
+    expect(matchPrediction?.fitScore).toBe(85);
+    expect(matchPrediction?.insufficientData).toBe(true);
+    expect(matchPrediction?.denominator).toBe(0);
+
     const answers = await prisma.applicationAnswer.findMany({ where: { applicationId: result.applicationId } });
     expect(answers.length).toBeGreaterThan(0);
 
