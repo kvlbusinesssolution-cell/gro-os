@@ -9,6 +9,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { confidenceBadgeClassName, PRIORITY_BADGE_CLASSNAME, PRIORITY_LABEL } from "../../opportunities/_lib/opportunity-display";
+import { BUYING_STAGE_LABEL } from "@/lib/business-development/buying-stage-display";
 import type { SortKey } from "../_lib/queries";
 import type { PriorityQueueRow } from "../_lib/types";
 import { AgingBadge } from "./aging-badge";
@@ -268,9 +269,14 @@ export function PriorityQueueTable({
                 </TableCell>
                 <TableCell>
                   {row.intentScore !== null ? (
-                    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium ${confidenceBadgeClassName(row.intentScore)}`}>
-                      {row.intentScore} · {row.intentScoreBand}
-                    </span>
+                    <div className="flex flex-col gap-1">
+                      <span className={`inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-xs font-medium ${confidenceBadgeClassName(row.intentScore)}`}>
+                        {row.intentScore} · {row.intentScoreBand}
+                      </span>
+                      {row.buyingStage && row.buyingStage !== "UNKNOWN" && (
+                        <span className="text-[11px] text-muted-foreground">{BUYING_STAGE_LABEL[row.buyingStage]}</span>
+                      )}
+                    </div>
                   ) : (
                     <span className="text-xs text-muted-foreground">Not scored yet</span>
                   )}

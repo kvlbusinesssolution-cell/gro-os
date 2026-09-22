@@ -1,4 +1,4 @@
-import type { OpportunityPriority, OpportunityStatus } from "@/generated/prisma/client";
+import type { OpportunityPriority, OpportunityStatus, BuyingStage } from "@/generated/prisma/client";
 import type { OpportunityScoreBreakdown } from "@/lib/business-development/opportunity-priority";
 
 /**
@@ -18,6 +18,8 @@ export interface PriorityQueueRow {
   leadScoreBand: string | null;
   intentScore: number | null;
   intentScoreBand: string | null;
+  /** Phase 28 (buying intent) — real, deterministic buying-stage classification (see classifyBuyingStage in intent-scoring.ts), never derived from intentScore alone. Null when the company has no IntentScore row yet. */
+  buyingStage: BuyingStage | null;
   opportunityScore: number | null;
   previousOpportunityScore: number | null;
   opportunityScoreBreakdown: OpportunityScoreBreakdown | null;

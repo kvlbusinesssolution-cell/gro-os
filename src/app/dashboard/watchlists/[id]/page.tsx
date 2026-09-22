@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { prisma } from "@/lib/prisma";
 import { requireActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { LeadScoreBadge } from "@/app/dashboard/_components/lead-score-badge";
+import { IntentScoreBadge } from "@/app/dashboard/_components/intent-score-badge";
 import { DeleteWatchlistButton, RemoveFromWatchlistButton } from "../_components/watchlist-detail-actions";
 
 const STATUS_VARIANT: Record<string, "outline" | "accent" | "default" | "secondary"> = {
@@ -17,16 +18,29 @@ const STATUS_VARIANT: Record<string, "outline" | "accent" | "default" | "seconda
   CHURNED: "secondary",
 };
 
-export default async function WatchlistDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function WatchlistDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ sort?: string }>;
+}) {
   const { id } = await params;
+  const { sort } = await searchParams;
   const { membership } = await requireActiveMembership(`/dashboard/watchlists/${id}`);
+
+  // Phase 28 (buying intent — Watchlist integration): real sort by
+  // IntentScore.score, matching the same real sortKey pattern Priority
+  // Queue already uses (priority-queue/_lib/queries.ts). Default stays
+  // "most recently added first" — sorting by intent is opt-in.
+  const sortByIntent = sort === "intentScore";
 
   const watchlist = await prisma.watchlist.findUnique({
     where: { id },
     include: {
       companies: {
-        orderBy: { addedAt: "desc" },
-        include: { company: { include: { leadScore: true } } },
+        orderBy: sortByIntent ? { company: { intentScore: { score: "desc" } } } : { addedAt: "desc" },
+        include: { company: { include: { leadScore: true, intentScore: true } } },
       },
     },
   });
@@ -52,7 +66,17 @@ export default async function WatchlistDetailPage({ params }: { params: Promise<
             </h1>
             {watchlist.description && <p className="text-sm text-muted-foreground">{watchlist.description}</p>}
           </div>
-          <DeleteWatchlistButton watchlistId={watchlist.id} watchlistName={watchlist.name} />
+          <div className="flex items-center gap-2">
+            {watchlist.companies.length > 0 && (
+              <Link
+                href={sortByIntent ? `/dashboard/watchlists/${id}` : `/dashboard/watchlists/${id}?sort=intentScore`}
+                className="text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              >
+                {sortByIntent ? "Sort: Intent score (highest first)" : "Sort by intent score"}
+              </Link>
+            )}
+            <DeleteWatchlistButton watchlistId={watchlist.id} watchlistName={watchlist.name} />
+          </div>
         </div>
 
         {watchlist.companies.length === 0 ? (
@@ -87,6 +111,9 @@ export default async function WatchlistDetailPage({ params }: { params: Promise<
                         </div>
                         {company.leadScore && (
                           <LeadScoreBadge band={company.leadScore.band} score={company.leadScore.overallScore} />
+                        )}
+                        {company.intentScore && (
+                          <IntentScoreBadge band={company.intentScore.band} score={company.intentScore.score} />
                         )}
                       </div>
                     </div>

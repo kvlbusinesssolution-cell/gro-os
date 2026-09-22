@@ -1,4 +1,5 @@
-import type { OpportunityPriority, Prisma } from "@/generated/prisma/client";
+import type { OpportunityPriority, BuyingStage, Prisma } from "@/generated/prisma/client";
+import { isBuyingStage } from "@/lib/business-development/buying-stage-display";
 import { PRIORITY_OPTIONS } from "../../opportunities/_lib/opportunity-display";
 
 /**
@@ -32,6 +33,7 @@ export interface PriorityQueueSearchParams {
   country?: string;
   industry?: string;
   owner?: string;
+  buyingStage?: string;
   sort?: string;
   dir?: string;
   page?: string;
@@ -48,6 +50,7 @@ export interface ParsedPriorityQueueFilters {
   country?: string;
   industry?: string;
   owner?: string; // "me" | "unassigned" | a real userId
+  buyingStage?: BuyingStage;
   sort: SortKey;
   dir: "asc" | "desc";
   page: number;
@@ -81,6 +84,7 @@ export function parsePriorityQueueFilters(params: PriorityQueueSearchParams): Pa
     country: params.country?.trim() || undefined,
     industry: params.industry?.trim() || undefined,
     owner: params.owner?.trim() || undefined,
+    buyingStage: isBuyingStage(params.buyingStage) ? params.buyingStage : undefined,
     sort: isSortKey(params.sort) ? params.sort : "priority",
     dir: params.dir === "asc" ? "asc" : "desc",
     page: Number.isFinite(pageRaw) && pageRaw > 1 ? Math.floor(pageRaw) : 1,
@@ -99,6 +103,7 @@ export function buildPriorityQueueWhere(
   if (filters.minOpportunityScore !== undefined) conditions.push({ opportunityScore: { gte: filters.minOpportunityScore } });
   if (filters.minLeadScore !== undefined) conditions.push({ company: { leadScore: { overallScore: { gte: filters.minLeadScore } } } });
   if (filters.minIntentScore !== undefined) conditions.push({ company: { intentScore: { score: { gte: filters.minIntentScore } } } });
+  if (filters.buyingStage) conditions.push({ company: { intentScore: { buyingStage: filters.buyingStage } } });
   if (filters.service) conditions.push({ recommendedService: filters.service });
   if (filters.country) conditions.push({ company: { headquartersCountry: filters.country } });
   if (filters.industry) conditions.push({ company: { industry: filters.industry } });

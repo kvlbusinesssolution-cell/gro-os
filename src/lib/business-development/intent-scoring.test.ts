@@ -13,6 +13,7 @@ import { computeIntentScore } from "./intent-scoring";
 // the test).
 describe("computeIntentScore", () => {
   let organizationId: string;
+  let loggedByUserId: string;
 
   let signalCompanyId: string;
   let zeroSignalCompanyId: string;
@@ -22,6 +23,11 @@ describe("computeIntentScore", () => {
       data: { name: "Intent Score Test Org", slug: `intent-score-test-org-${Date.now()}` },
     });
     organizationId = org.id;
+
+    const user = await prisma.user.create({
+      data: { name: "Intent Score Test User", email: `intent-score-test-user-${Date.now()}@example.com` },
+    });
+    loggedByUserId = user.id;
 
     // Company with real, populated signal lists + a real poor-performance
     // CompanyEvidence fact — every one of these traces back to a fixture
@@ -85,6 +91,7 @@ describe("computeIntentScore", () => {
 
   afterAll(async () => {
     await prisma.organization.delete({ where: { id: organizationId } });
+    await prisma.user.delete({ where: { id: loggedByUserId } });
 
     const leaked = await prisma.company.count({ where: { organizationId } });
     expect(leaked).toBe(0);
@@ -153,5 +160,101 @@ describe("computeIntentScore", () => {
   it("returns null for a nonexistent companyId", async () => {
     const result = await computeIntentScore("nonexistent-company-id-does-not-exist");
     expect(result).toBeNull();
+  });
+
+  it("applies real decay — an old reply contributes fewer points than a fresh one with identical intent", async () => {
+    const freshCo = await prisma.company.create({ data: { organizationId, name: "Fresh Reply Co" } });
+    const staleCo = await prisma.company.create({ data: { organizationId, name: "Aged Reply Co" } });
+
+    const freshContact = await prisma.contact.create({
+      data: { organizationId, companyId: freshCo.id, firstName: "Fresh", email: `fresh-${Date.now()}@example.com` },
+    });
+    const staleContact = await prisma.contact.create({
+      data: { organizationId, companyId: staleCo.id, firstName: "Stale", email: `stale-${Date.now()}@example.com` },
+    });
+
+    // REPLY_DECAY = { fullWeightDays: 7, floorDays: 30, floorMultiplier: 0.2 }.
+    // INTERESTED = 8 base points. At age 20 days (inside the taper window):
+    // span=23, progress=(20-7)/23≈0.565, multiplier≈1-0.565*0.8≈0.548 → round(8*0.548)=4.
+    await prisma.reply.create({
+      data: { organizationId, loggedByUserId, contactId: freshContact.id, intent: "INTERESTED", channel: "EMAIL", content: "Thanks, interested — tell me more.", receivedAt: new Date() },
+    });
+    await prisma.reply.create({
+      data: { organizationId, loggedByUserId, contactId: staleContact.id, intent: "INTERESTED", channel: "EMAIL", content: "Thanks, interested — tell me more.", receivedAt: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000) },
+    });
+
+    const freshResult = await computeIntentScore(freshCo.id);
+    const staleResult = await computeIntentScore(staleCo.id);
+
+    const freshSignal = freshResult?.signals.find((s) => s.source === "replyEngagement");
+    const staleSignal = staleResult?.signals.find((s) => s.source === "replyEngagement");
+
+    expect(freshSignal?.points).toBe(8); // full weight, within fullWeightDays
+    expect(staleSignal?.points).toBe(4); // real, computed decay — not fabricated, not zero
+    expect(staleSignal!.points).toBeLessThan(freshSignal!.points);
+  });
+
+  it("never fully zeroes an old signal — applies the real floor multiplier past floorDays, not zero", async () => {
+    const floorCo = await prisma.company.create({ data: { organizationId, name: "Past Floor Co" } });
+    const floorContact = await prisma.contact.create({
+      data: { organizationId, companyId: floorCo.id, firstName: "OldSignal", email: `floor-${Date.now()}@example.com` },
+    });
+
+    // 35 days > floorDays (30) → floorMultiplier 0.2 flat. round(8 * 0.2) = 2.
+    await prisma.reply.create({
+      data: { organizationId, loggedByUserId, contactId: floorContact.id, intent: "INTERESTED", channel: "EMAIL", content: "Thanks, interested — tell me more.", receivedAt: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000) },
+    });
+
+    const result = await computeIntentScore(floorCo.id);
+    const signal = result?.signals.find((s) => s.source === "replyEngagement");
+
+    expect(signal).toBeDefined();
+    expect(signal?.points).toBe(2); // real floor value — never fully deleted/zeroed
+    expect(signal!.points).toBeGreaterThan(0);
+  });
+
+  it("does not inflate a score into HIGH band from weak/borderline evidence alone (false-positive guard)", async () => {
+    const weakCo = await prisma.company.create({ data: { organizationId, name: "Weak Evidence Co" } });
+    const weakContact = await prisma.contact.create({
+      data: { organizationId, companyId: weakCo.id, firstName: "Weak", email: `weak-${Date.now()}@example.com` },
+    });
+
+    // A single low-weight reply (FOLLOW_UP_LATER = 4 points) is the only
+    // real evidence — nowhere near HIGH (70+) or even MEDIUM (40+).
+    await prisma.reply.create({
+      data: { organizationId, loggedByUserId, contactId: weakContact.id, intent: "FOLLOW_UP_LATER", channel: "EMAIL", content: "Circle back next month please.", receivedAt: new Date() },
+    });
+
+    const result = await computeIntentScore(weakCo.id);
+    expect(result).not.toBeNull();
+    expect(result!.score).toBeLessThan(40);
+    expect(result!.band).not.toBe("HIGH");
+    expect(result!.band).not.toBe("MEDIUM");
+  });
+
+  it("handles a real contradictory-signal sequence (positive reply, then a later NOT_INTERESTED reply) without fabricating a negative score or double-counting", async () => {
+    const conflictCo = await prisma.company.create({ data: { organizationId, name: "Conflicting Signals Co" } });
+    const conflictContact = await prisma.contact.create({
+      data: { organizationId, companyId: conflictCo.id, firstName: "Conflict", email: `conflict-${Date.now()}@example.com` },
+    });
+
+    await prisma.reply.create({
+      data: { organizationId, loggedByUserId, contactId: conflictContact.id, intent: "INTERESTED", channel: "EMAIL", content: "Thanks, interested — tell me more.", receivedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) },
+    });
+    // A later reply retracting interest — REPLY_INTENT_POINTS has no entry
+    // for NOT_INTERESTED, so it contributes exactly 0, never a fabricated
+    // negative adjustment (this codebase's scoring never subtracts).
+    await prisma.reply.create({
+      data: { organizationId, loggedByUserId, contactId: conflictContact.id, intent: "NOT_INTERESTED", channel: "EMAIL", content: "Actually not interested, please remove me.", receivedAt: new Date() },
+    });
+
+    const result = await computeIntentScore(conflictCo.id);
+    expect(result).not.toBeNull();
+    const replySignals = result!.signals.filter((s) => s.source === "replyEngagement");
+    // Only the real positive-evidence reply is counted — the NOT_INTERESTED
+    // reply contributes no signal row at all (not a fabricated 0-point row).
+    expect(replySignals).toHaveLength(1);
+    expect(result!.score).toBeGreaterThan(0);
+    expect(result!.score).toBeLessThan(40); // one aged-2-day INTERESTED reply alone stays well under HIGH/MEDIUM
   });
 });
