@@ -43,6 +43,37 @@ export interface RateLimitCheckResult {
   reason?: string;
 }
 
+// ----- Warmup (§4) -----
+// A brand-new SendingIdentity previously sent at its full configured
+// dailyLimit/hourlyLimit from day one — no real ESP/deliverability best
+// practice supports that (a cold domain/mailbox sending at full volume
+// immediately is a real, well-documented spam-trigger risk). Real,
+// deterministic ramp based on `identity.createdAt` age — no separate
+// warmup-tracking field needed, `createdAt` already exists and is honest
+// (an identity that's been sending safely for weeks is genuinely warmed
+// up; one created 2 minutes ago is genuinely not, regardless of what any
+// separate flag might claim).
+export const WARMUP_SCHEDULE = [
+  { maxDays: 7, dailyLimitFraction: 0.2 },
+  { maxDays: 14, dailyLimitFraction: 0.5 },
+  { maxDays: 21, dailyLimitFraction: 0.8 },
+  // Day 22+: no cap — sends at the real configured dailyLimit/hourlyLimit.
+] as const;
+
+/** Real fraction of the configured dailyLimit/hourlyLimit a SendingIdentity may use today, based on its real age. 1 (no reduction) once warmup is complete. */
+export function warmupFraction(createdAt: Date, now: Date = new Date()): number {
+  const ageDays = (now.getTime() - createdAt.getTime()) / 86_400_000;
+  for (const step of WARMUP_SCHEDULE) {
+    if (ageDays < step.maxDays) return step.dailyLimitFraction;
+  }
+  return 1;
+}
+
+/** Real, effective limit for today — the configured limit scaled by the real warmup fraction, floored at 1 so a warming-up identity can still send at least one real email rather than being fully blocked. */
+function effectiveLimit(configuredLimit: number, fraction: number): number {
+  return Math.max(1, Math.floor(configuredLimit * fraction));
+}
+
 function isSameHour(a: Date, b: Date): boolean {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate() && a.getHours() === b.getHours();
 }
@@ -76,8 +107,14 @@ export async function checkRateLimit(identity: SendingIdentity): Promise<RateLim
   if (identity.status === "COOLDOWN" && identity.cooldownUntil && identity.cooldownUntil > now) {
     return { allowed: false, reason: `Sending identity is in COOLDOWN until ${identity.cooldownUntil.toISOString()}: ${identity.cooldownReason ?? "no reason recorded"}.` };
   }
-  if (identity.sentToday >= identity.dailyLimit) return { allowed: false, reason: `Daily limit reached (${identity.sentToday}/${identity.dailyLimit}).` };
-  if (identity.sentThisHour >= identity.hourlyLimit) return { allowed: false, reason: `Hourly limit reached (${identity.sentThisHour}/${identity.hourlyLimit}).` };
+
+  const fraction = warmupFraction(identity.createdAt, now);
+  const dailyLimit = effectiveLimit(identity.dailyLimit, fraction);
+  const hourlyLimit = effectiveLimit(identity.hourlyLimit, fraction);
+  const warmupSuffix = fraction < 1 ? ` (warming up — ${Math.round(fraction * 100)}% of configured limit while this identity is new)` : "";
+
+  if (identity.sentToday >= dailyLimit) return { allowed: false, reason: `Daily limit reached (${identity.sentToday}/${dailyLimit}).${warmupSuffix}` };
+  if (identity.sentThisHour >= hourlyLimit) return { allowed: false, reason: `Hourly limit reached (${identity.sentThisHour}/${hourlyLimit}).${warmupSuffix}` };
   return { allowed: true };
 }
 

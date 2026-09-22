@@ -47,11 +47,26 @@ export interface CampaignAnalytics {
   positiveReplies: number;
   meetingsBooked: number;
   bounceRate: number;
+  unsubscribeRate: number;
 }
 
-/** Real, on-the-fly aggregation — every rate is sentCount-derived, never estimated. Bounce rate is honestly limited to real SMTP-level send failures (no ESP bounce webhook configured). */
+/**
+ * Real, on-the-fly aggregation — every rate is sentCount-derived, never
+ * estimated. Bounce rate is honestly limited to real SMTP-level send
+ * failures (no ESP bounce webhook configured).
+ *
+ * Phase 30 (Enterprise Email Deliverability Engine) — unsubscribeRate added,
+ * same real ratio-of-sent pattern as replyRate/openRate/clickRate above
+ * (numerator/denominator from real rows, never a raw unexplained count).
+ * Numerator: real recipients of this campaign whose `Contact.status` is
+ * genuinely `UNSUBSCRIBED` today (set by real code — e.g. an inbound
+ * UNSUBSCRIBE-intent reply, see reply-automation.ts) — never inferred from
+ * a `SuppressionEntry` alone, since that table isn't campaign-scoped and a
+ * contact could be suppressed for a real reason unrelated to this specific
+ * campaign's sends.
+ */
 export async function getCampaignAnalytics(campaignId: string): Promise<CampaignAnalytics> {
-  const [emailsSent, opened, clicked, repliesCount, positiveReplies, meetingsBooked, failed] = await Promise.all([
+  const [emailsSent, opened, clicked, repliesCount, positiveReplies, meetingsBooked, failed, unsubscribed] = await Promise.all([
     prisma.emailDraft.count({ where: { campaignId, status: "SENT" } }),
     prisma.emailDraft.count({ where: { campaignId, openCount: { gt: 0 } } }),
     prisma.emailDraft.count({ where: { campaignId, clickCount: { gt: 0 } } }),
@@ -59,6 +74,7 @@ export async function getCampaignAnalytics(campaignId: string): Promise<Campaign
     prisma.reply.count({ where: { campaignId, sentiment: "POSITIVE" } }),
     prisma.outreachMeeting.count({ where: { campaignId, status: { in: ["CONFIRMED", "COMPLETED"] } } }),
     prisma.emailDraft.count({ where: { campaignId, status: "FAILED" } }),
+    prisma.emailDraft.count({ where: { campaignId, status: "SENT", contact: { status: "UNSUBSCRIBED" } } }),
   ]);
 
   const attempted = emailsSent + failed;
@@ -70,6 +86,7 @@ export async function getCampaignAnalytics(campaignId: string): Promise<Campaign
     positiveReplies,
     meetingsBooked,
     bounceRate: attempted > 0 ? Math.round((failed / attempted) * 100) : 0,
+    unsubscribeRate: emailsSent > 0 ? Math.round((unsubscribed / emailsSent) * 100) : 0,
   };
 }
 

@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 
-import { getAbVariantPerformance } from "./campaign-analytics";
+import { getAbVariantPerformance, getCampaignAnalytics } from "./campaign-analytics";
 
 /**
  * Phase 17 (Advanced Outbound + Email Deliverability) — real local-Postgres
@@ -114,5 +114,77 @@ describe("getAbVariantPerformance", () => {
     const report = await getAbVariantPerformance(orgId, "does-not-exist");
     expect(report.variants).toEqual([]);
     expect(report.leadingVariant).toBeNull();
+  });
+});
+
+/**
+ * Phase 30 (Enterprise Email Deliverability Engine) — real test coverage
+ * for getCampaignAnalytics, previously untested. Focused on the new
+ * unsubscribeRate field (same real ratio-of-sent pattern as replyRate).
+ */
+describe("getCampaignAnalytics — unsubscribeRate", () => {
+  let orgId: string;
+  let userId: string;
+  let companyId: string;
+  let campaignId: string;
+
+  async function makeSentDraft(opts: { unsubscribed?: boolean } = {}) {
+    const contact = await prisma.contact.create({
+      data: {
+        organizationId: orgId,
+        companyId,
+        firstName: "Unsub",
+        lastName: "Test",
+        email: `unsub-rate-${Math.random().toString(36).slice(2)}@example.com`,
+        ownerUserId: userId,
+        status: opts.unsubscribed ? "UNSUBSCRIBED" : undefined,
+      },
+    });
+    return prisma.emailDraft.create({
+      data: { organizationId: orgId, campaignId, contactId: contact.id, channel: "EMAIL", purpose: "INTRODUCTION", tone: "PROFESSIONAL", subject: "S", body: "Body.", status: "SENT", sentAt: new Date() },
+    });
+  }
+
+  beforeAll(async () => {
+    const suffix = Date.now();
+    const org = await prisma.organization.create({ data: { name: "Unsub Rate Test Org", slug: `unsub-rate-org-${suffix}` } });
+    orgId = org.id;
+    const user = await prisma.user.create({ data: { name: "Unsub Rate Test User", email: `unsub-rate-user-${suffix}@example.com` } });
+    userId = user.id;
+    await prisma.membership.create({ data: { userId, organizationId: orgId, role: "OWNER", status: "ACTIVE" } });
+    const company = await prisma.company.create({ data: { organizationId: orgId, name: "Unsub Rate Co", status: "PROSPECT" } });
+    companyId = company.id;
+    const campaign = await prisma.campaign.create({ data: { organizationId: orgId, name: "Unsub Rate Campaign", type: "STANDARD", status: "ACTIVE", createdByUserId: userId } });
+    campaignId = campaign.id;
+
+    // 4 real sends, 1 real recipient genuinely unsubscribed — real 25% rate.
+    await makeSentDraft({ unsubscribed: true });
+    await makeSentDraft();
+    await makeSentDraft();
+    await makeSentDraft();
+  });
+
+  afterAll(async () => {
+    await prisma.emailDraft.deleteMany({ where: { organizationId: orgId } });
+    await prisma.contact.deleteMany({ where: { organizationId: orgId } });
+    await prisma.campaign.deleteMany({ where: { organizationId: orgId } });
+    await prisma.company.deleteMany({ where: { organizationId: orgId } });
+    await prisma.membership.deleteMany({ where: { organizationId: orgId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+    await prisma.organization.deleteMany({ where: { id: orgId } });
+  });
+
+  it("computes a real unsubscribeRate as a genuine ratio of this campaign's own sent recipients, never a raw count", async () => {
+    const analytics = await getCampaignAnalytics(campaignId);
+    expect(analytics.emailsSent).toBe(4);
+    expect(analytics.unsubscribeRate).toBe(25);
+  });
+
+  it("returns 0 (never NaN/undefined) for a campaign with no real sends at all", async () => {
+    const emptyCampaign = await prisma.campaign.create({ data: { organizationId: orgId, name: "Empty Campaign", type: "STANDARD", status: "DRAFT", createdByUserId: userId } });
+    const analytics = await getCampaignAnalytics(emptyCampaign.id);
+    expect(analytics.emailsSent).toBe(0);
+    expect(analytics.unsubscribeRate).toBe(0);
+    await prisma.campaign.deleteMany({ where: { id: emptyCampaign.id } });
   });
 });
