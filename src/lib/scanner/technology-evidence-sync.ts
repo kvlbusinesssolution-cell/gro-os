@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { Technology } from "@/generated/prisma/client";
+import { resolveFieldConflict } from "@/lib/business-development/evidence-priority";
 
 /**
  * Human-readable clause describing what each Technology.category means when
@@ -51,26 +52,47 @@ function buildFact(tech: Pick<Technology, "name" | "category" | "evidence">): st
  * their de-duplicated names, and records a `CompanyEvidence` row per
  * detection so the detection is independently auditable later. Idempotent:
  * re-running against the same scan (e.g. a retried scheduled job) never
- * creates duplicate CompanyEvidence rows.
+ * creates duplicate CompanyEvidence rows. Never overwrites
+ * Company.technologies when a higher-or-equal-priority source (e.g. a real
+ * MANUAL edit) already backs the field — see resolveFieldConflict; the
+ * detection is still recorded as evidence either way.
  */
-export async function syncCompanyTechnologiesFromScan(companyId: string, websiteScanId: string): Promise<{ detected: number; evidenceCreated: number }> {
+export async function syncCompanyTechnologiesFromScan(
+  companyId: string,
+  websiteScanId: string,
+): Promise<{ detected: number; evidenceCreated: number; scalarUpdated: boolean }> {
   const scan = await prisma.websiteScan.findUnique({
     where: { id: websiteScanId },
     include: { technologies: true },
   });
-  if (!scan) return { detected: 0, evidenceCreated: 0 };
+  if (!scan) return { detected: 0, evidenceCreated: 0, scalarUpdated: false };
 
   const technologies = scan.technologies;
   const sourceUrl = scan.finalUrl ?? scan.url ?? null;
 
   const dedupedNames = [...new Set(technologies.map((t) => t.name))];
-  await prisma.company.update({
-    where: { id: companyId },
-    data: { technologies: dedupedNames },
+
+  // Phase 26 (requirement #7, wire conflict resolution into a real write
+  // path): a MANUAL edit to Company.technologies (see companies/actions.ts)
+  // now records real MANUAL-source CompanyEvidence for this field — so a
+  // human-entered value existing on file must not be silently overwritten
+  // by a lower-priority automated scan. evidence-priority.ts's
+  // resolveFieldConflict was built in Phase 24 but had no real caller
+  // until now.
+  const existingFieldEvidence = await prisma.companyEvidence.findMany({
+    where: { companyId, fieldName: "technologies" },
+    select: { source: true },
   });
+  const conflict = resolveFieldConflict("WEBSITE_SCAN", existingFieldEvidence);
+  if (conflict.shouldApplyToCompanyField) {
+    await prisma.company.update({
+      where: { id: companyId },
+      data: { technologies: dedupedNames },
+    });
+  }
 
   if (technologies.length === 0) {
-    return { detected: 0, evidenceCreated: 0 };
+    return { detected: 0, evidenceCreated: 0, scalarUpdated: conflict.shouldApplyToCompanyField };
   }
 
   const candidateFacts = technologies.map((t) => buildFact(t));
@@ -104,5 +126,5 @@ export async function syncCompanyTechnologiesFromScan(companyId: string, website
     });
   }
 
-  return { detected: technologies.length, evidenceCreated: rowsToCreate.length };
+  return { detected: technologies.length, evidenceCreated: rowsToCreate.length, scalarUpdated: conflict.shouldApplyToCompanyField };
 }

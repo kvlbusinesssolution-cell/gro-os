@@ -23,7 +23,7 @@ vi.mock("next/headers", () => ({ cookies: vi.fn(async () => ({ get: () => undefi
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 
-import { createCompany } from "./actions";
+import { createCompany, updateCompany } from "./actions";
 
 // Real local-Postgres integration test (no mocking of Prisma), same
 // convention as opportunity-actions.test.ts. Scoped under two throwaway
@@ -119,5 +119,40 @@ describe("companies/actions: referralPartnerId attribution", () => {
 
     const countAfter = await prisma.company.count({ where: { organizationId: orgId } });
     expect(countAfter).toBe(countBefore);
+  });
+
+  // Phase 26 (requirement #6/#7, source priority + conflict handling) — a
+  // real MANUAL-source CompanyEvidence row must exist for a genuine
+  // technologies edit, so a later lower-priority automated scan has
+  // something real to check against (see technology-evidence-sync.ts).
+  it("records real MANUAL CompanyEvidence when technologies is genuinely changed via updateCompany", async () => {
+    const created = await createCompany({ name: "Tech Evidence On Edit Co", status: "PROSPECT" });
+    expect(created.ok).toBe(true);
+    const companyId = created.companyId!;
+
+    const result = await updateCompany(companyId, {
+      name: "Tech Evidence On Edit Co",
+      status: "PROSPECT",
+      technologies: ["Ruby on Rails", "PostgreSQL"],
+    });
+    expect(result.ok).toBe(true);
+
+    const evidence = await prisma.companyEvidence.findMany({ where: { companyId, source: "MANUAL", fieldName: "technologies" } });
+    expect(evidence.length).toBe(1);
+    expect(evidence[0].fact).toContain("Ruby on Rails");
+    expect(evidence[0].verificationStatus).toBe("USER_VERIFIED");
+  });
+
+  it("does not create duplicate MANUAL evidence when updateCompany is called again with the same technologies", async () => {
+    const created = await createCompany({ name: "Tech Evidence No-Change Co", status: "PROSPECT" });
+    const companyId = created.companyId!;
+
+    await updateCompany(companyId, { name: "Tech Evidence No-Change Co", status: "PROSPECT", technologies: ["React"] });
+    const firstCount = await prisma.companyEvidence.count({ where: { companyId, source: "MANUAL", fieldName: "technologies" } });
+    expect(firstCount).toBe(1);
+
+    await updateCompany(companyId, { name: "Tech Evidence No-Change Co", status: "PROSPECT", technologies: ["React"] });
+    const secondCount = await prisma.companyEvidence.count({ where: { companyId, source: "MANUAL", fieldName: "technologies" } });
+    expect(secondCount).toBe(1); // no new row for a genuinely unchanged value
   });
 });

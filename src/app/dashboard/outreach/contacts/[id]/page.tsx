@@ -10,6 +10,8 @@ import { prisma } from "@/lib/prisma";
 import { requireActiveMembership } from "@/app/dashboard/_lib/require-membership";
 import { LeadScoreBadge } from "@/app/dashboard/_components/lead-score-badge";
 import { OpportunityBandBadge } from "@/app/dashboard/website-scanner/_components/opportunity-band-badge";
+import { classifyEvidenceFreshness } from "@/lib/business-development/evidence-freshness";
+import { ContactEvidencePanel } from "../_components/contact-evidence-panel";
 import { DraftCard } from "../../_components/draft-card";
 import { GenerateDraftPanel } from "./_components/generate-draft-panel";
 import { FollowUpPanel } from "./_components/follow-up-panel";
@@ -35,6 +37,7 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
       emailDrafts: { orderBy: { createdAt: "desc" }, include: { approvals: { orderBy: { createdAt: "desc" } } } },
       replies: { orderBy: { receivedAt: "desc" } },
       outreachMeetings: { orderBy: { createdAt: "desc" } },
+      evidence: { orderBy: { discoveredAt: "desc" }, take: 100 },
     },
   });
 
@@ -80,6 +83,7 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
                 <TabsTrigger value="drafts">Drafts ({contact.emailDrafts.length})</TabsTrigger>
                 <TabsTrigger value="replies">Replies ({contact.replies.length})</TabsTrigger>
                 <TabsTrigger value="meetings">Meetings ({contact.outreachMeetings.length})</TabsTrigger>
+                <TabsTrigger value="evidence">Evidence ({contact.evidence.length})</TabsTrigger>
               </TabsList>
 
               <TabsContent value="drafts">
@@ -148,6 +152,16 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
                     </CardContent>
                   </Card>
                 ))}
+              </TabsContent>
+
+              <TabsContent value="evidence">
+                <ContactEvidencePanel
+                  evidence={contact.evidence.map((e) => ({
+                    ...e,
+                    discoveredAt: e.discoveredAt.toISOString(),
+                    freshness: classifyEvidenceFreshness(e.discoveredAt, new Date()),
+                  }))}
+                />
               </TabsContent>
             </Tabs>
           </div>

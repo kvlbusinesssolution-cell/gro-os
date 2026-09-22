@@ -330,6 +330,7 @@ export async function enrichContact(contactId: string, options: EnrichContactOpt
   });
 
   const { seniority, probability } = estimateSeniority(contact.jobTitle);
+  const buyerRole = classifyBuyerRole(contact.jobTitle);
 
   const fullName = `${contact.firstName} ${contact.lastName ?? ""}`.trim();
   const matched = contact.decisionMakerId
@@ -349,9 +350,40 @@ export async function enrichContact(contactId: string, options: EnrichContactOpt
       // not a department). `department` itself is never touched by
       // enrichment now — it stays genuinely user-editable/empty.
       seniority: contact.seniority ?? seniority,
-      buyerRole: classifyBuyerRole(contact.jobTitle),
+      buyerRole,
     },
   });
+
+  // Phase 26 (wire ContactEvidence for real — Phase 25's report claimed
+  // this was already done; it wasn't, confirmed by audit). Both values are
+  // deterministic derivations from the contact's own already-stored
+  // jobTitle (never an AI call, nothing fabricated) — `kind:
+  // AI_INTERPRETATION` is used as the closest existing category for "an
+  // inference, not a directly observed fact" (EvidenceKind has no
+  // dedicated "deterministic derivation" value; RAW_FACT would overstate
+  // it as an observed fact, which it isn't). Only written when the
+  // contact didn't already have this exact seniority/buyerRole on file, so
+  // a repeated no-change re-enrichment run doesn't spam duplicate rows —
+  // same idempotency discipline as technology-evidence-sync.ts.
+  const evidenceRows: Array<{ fieldName: string; fact: string }> = [];
+  if (seniority && contact.seniority !== seniority) {
+    evidenceRows.push({ fieldName: "seniority", fact: `Seniority estimated as "${seniority}" from job title "${contact.jobTitle}".` });
+  }
+  if (buyerRole && buyerRole !== "UNKNOWN" && contact.buyerRole !== buyerRole) {
+    evidenceRows.push({ fieldName: "buyerRole", fact: `Buyer role classified as ${buyerRole} from job title "${contact.jobTitle}".` });
+  }
+  if (evidenceRows.length > 0) {
+    await prisma.contactEvidence.createMany({
+      data: evidenceRows.map((row) => ({
+        contactId,
+        kind: "AI_INTERPRETATION" as const,
+        fact: row.fact,
+        source: "COMPANY_INTELLIGENCE" as const,
+        confidence: probability ?? 0.5,
+        fieldName: row.fieldName,
+      })),
+    });
+  }
 
   run = await prisma.enrichmentRun.update({
     where: { id: run.id },

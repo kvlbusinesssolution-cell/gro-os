@@ -1,5 +1,6 @@
 import { generateStructuredViaJsonMode } from "./json-mode";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredResponse, ProviderTextRequest, ProviderTextResponse } from "./types";
+import { ProviderHttpError, parseRetryAfterMs } from "./provider-error";
 
 /**
  * Primary provider (see fallback.ts's PROVIDER_CHAIN) — Google's Gemini API
@@ -54,7 +55,7 @@ async function callRaw(
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`HTTP ${res.status} from GOOGLE_GEMINI: ${body.slice(0, 500)}`);
+    throw new ProviderHttpError(`HTTP ${res.status} from GOOGLE_GEMINI: ${body.slice(0, 500)}`, res.status, parseRetryAfterMs(res.headers.get("retry-after")));
   }
 
   const data = (await res.json()) as {

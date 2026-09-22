@@ -14,11 +14,17 @@ import { DEFAULT_STALE_DAYS, HIGH_VALUE_STALE_DAYS } from "./enrichment";
  * Reuses the SAME two real thresholds stale-reenrichment-job.ts already
  * uses for whole-company re-enrichment (DEFAULT_STALE_DAYS / HIGH_VALUE_
  * STALE_DAYS) rather than inventing new, undocumented per-fact-type decay
- * rates — this codebase has no structured "this fact is about funding vs.
- * hiring" field on CompanyEvidence today (only free-text `fact`), so a
- * genuinely per-field freshness model isn't honestly buildable without a
- * schema change beyond this phase's scope. AGING is the honest middle
- * ground between the two thresholds, not a fabricated third number.
+ * rates. AGING is the honest middle ground between the two thresholds, not
+ * a fabricated third number.
+ *
+ * Phase 24 added a real `fieldName` column to CompanyEvidence (and Phase 25
+ * mirrored it onto ContactEvidence), so a genuinely per-FIELD evidence
+ * query is possible today (`WHERE fieldName = "employeeCount"`) — this
+ * function itself still classifies by a single `discoveredAt`, same as
+ * before; the caller decides which evidence rows (e.g. one field's) to
+ * pass in. Still no separate per-fact-type decay RATE (funding facts don't
+ * decay faster than hiring facts here) — that remains honestly out of
+ * scope, not fabricated.
  */
 export type EvidenceFreshness = "FRESH" | "AGING" | "STALE";
 

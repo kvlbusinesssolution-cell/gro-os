@@ -8,6 +8,7 @@ import { openrouterProvider } from "./providers/openrouter-provider";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderTextRequest } from "./providers/types";
 import type { AIUsageProvider } from "@/generated/prisma/client";
 import { enqueueAIFallbackRetry } from "./fallback-queue";
+import { classifyProviderError } from "./providers/provider-error";
 
 /**
  * The real provider cascade: paid Gemini first — the org is paying for real
@@ -25,21 +26,56 @@ import { enqueueAIFallbackRetry } from "./fallback-queue";
 const PROVIDER_CHAIN: AIProviderAdapter[] = [geminiProvider, openaiProvider, anthropicProvider, groqProvider, openrouterProvider];
 
 /**
- * Soft, per-process circuit breaker. When a provider fails, skip it for the
- * next COOLDOWN_MS instead of re-trying it on every subsequent call — this
- * is what actually keeps cost down when Claude runs out of credit: instead
- * of paying for (and waiting out) a failed Anthropic call on every single
- * agent turn, the chain jumps straight to the free tier for a full minute
- * before probing Claude again. Purely an in-memory optimization (resets on
+ * Soft, per-process circuit breaker. When a provider fails, skip it for a
+ * real cooldown window instead of re-trying it on every subsequent call —
+ * this is what actually keeps cost down when Claude runs out of credit:
+ * instead of paying for (and waiting out) a failed Anthropic call on every
+ * single agent turn, the chain jumps straight to the free tier before
+ * probing Claude again. Purely an in-memory optimization (resets on
  * deploy/restart) — never a source of truth for whether a provider is
  * actually configured or down.
+ *
+ * Phase 26 (real, minimal provider-state fix): the cooldown duration is no
+ * longer a flat guess for every failure — when the provider sent a real
+ * `Retry-After` header (a genuine RATE_LIMITED/429 signal, distinct from a
+ * generic FAILED), that real value is honored (capped at
+ * MAX_RETRY_COOLDOWN_MS so a broken/huge header can't lock a provider out
+ * indefinitely). Every other failure (5xx, network error, etc.) still gets
+ * the flat DEFAULT_COOLDOWN_MS — this is deliberately NOT a persisted
+ * provider-health-history table or a live health dashboard; both are
+ * Phase 27's explicit "provider health monitoring" scope.
  */
-const COOLDOWN_MS = 60_000;
-const lastFailureAt = new Map<string, number>();
+const DEFAULT_COOLDOWN_MS = 60_000;
+const MAX_RETRY_COOLDOWN_MS = 5 * 60_000;
+interface CooldownState {
+  failedAt: number;
+  cooldownMs: number;
+  /** Real HTTP status from the failure, when known — null for a non-HTTP error (e.g. a thrown network exception). Exposed for observability/tests, not read by any other logic here. */
+  status: number | null;
+}
+const cooldownState = new Map<string, CooldownState>();
 
 function isCoolingDown(id: string): boolean {
-  const failedAt = lastFailureAt.get(id);
-  return failedAt !== undefined && Date.now() - failedAt < COOLDOWN_MS;
+  const state = cooldownState.get(id);
+  return state !== undefined && Date.now() - state.failedAt < state.cooldownMs;
+}
+
+function recordFailure(id: string, error: unknown): CooldownState {
+  const { status, retryAfterMs } = classifyProviderError(error);
+  const cooldownMs = retryAfterMs !== null ? Math.min(retryAfterMs, MAX_RETRY_COOLDOWN_MS) : DEFAULT_COOLDOWN_MS;
+  const state: CooldownState = { failedAt: Date.now(), cooldownMs, status };
+  cooldownState.set(id, state);
+  return state;
+}
+
+/** Test-only escape hatch — the cooldown map is real module-level state that would otherwise leak between test cases. */
+export function __resetCooldownStateForTests(): void {
+  cooldownState.clear();
+}
+
+/** Test-only introspection — lets a test confirm the real recorded cooldown duration (e.g. a real Retry-After value) without exposing the map itself. */
+export function __getCooldownStateForTests(id: string): CooldownState | undefined {
+  return cooldownState.get(id);
 }
 
 export class AllAIProvidersFailedError extends Error {
@@ -104,13 +140,16 @@ async function runChain<R extends { inputTokens: number; outputTokens: number }>
 
     try {
       const result = await op(provider);
-      lastFailureAt.delete(provider.id);
+      cooldownState.delete(provider.id);
       return { result, provider };
     } catch (error) {
-      lastFailureAt.set(provider.id, Date.now());
+      const state = recordFailure(provider.id, error);
       const message = error instanceof Error ? error.message : String(error);
       attempts.push({ providerId: provider.id, error: message });
-      console.warn(`[ai/fallback] ${provider.id} failed, trying next provider:`, message);
+      console.warn(
+        `[ai/fallback] ${provider.id} failed (status=${state.status ?? "unknown"}, cooldown=${state.cooldownMs}ms), trying next provider:`,
+        message,
+      );
     }
   }
 

@@ -183,8 +183,11 @@ describe("resolveOutreachContact", () => {
 
     if (result.emailSource === "found") {
       expect(contact.email).toMatch(/^[^\s@]+@[^\s@]+\.[^\s@]+$/);
-      const evidence = await prisma.companyEvidence.findMany({
-        where: { companyId: searchCompanyId, source: "WEB_SEARCH" },
+      // Phase 26 fix: this is a fact about the CONTACT (their email), so it
+      // now belongs on ContactEvidence, not CompanyEvidence — see
+      // decision-maker-outreach.ts.
+      const evidence = await prisma.contactEvidence.findMany({
+        where: { contactId: result.contactId, source: "WEB_SEARCH", fieldName: "email" },
       });
       expect(evidence.some((e) => e.fact.includes(contact.email))).toBe(true);
     } else {

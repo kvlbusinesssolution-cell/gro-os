@@ -217,6 +217,11 @@ export async function updateCompany(companyId: string, input: CompanyInput): Pro
       if (hqQuery) coords = await geocodeAddress(hqQuery);
     }
 
+    const nextTechnologies = parsed.data.technologies ?? [];
+    const technologiesChanged =
+      nextTechnologies.length !== existing.technologies.length ||
+      nextTechnologies.some((t) => !existing.technologies.includes(t));
+
     await prisma.company.update({
       where: { id: companyId },
       data: {
@@ -225,6 +230,26 @@ export async function updateCompany(companyId: string, input: CompanyInput): Pro
         ...(coords ? { latitude: coords.lat, longitude: coords.lng } : {}),
       },
     });
+
+    // Phase 26 (requirement #6/#7, source priority + conflict handling): a
+    // human editing this field manually is real MANUAL-source evidence —
+    // without it, an automated WEBSITE_SCAN resync had no higher-priority
+    // evidence to check against and would silently overwrite a real human
+    // correction (see technology-evidence-sync.ts's resolveFieldConflict
+    // call). Only written when the value genuinely changed.
+    if (technologiesChanged && nextTechnologies.length > 0) {
+      await prisma.companyEvidence.create({
+        data: {
+          companyId,
+          kind: "RAW_FACT",
+          fact: `Technologies manually set to: ${nextTechnologies.join(", ")}.`,
+          source: "MANUAL",
+          confidence: 1.0,
+          fieldName: "technologies",
+          verificationStatus: "USER_VERIFIED",
+        },
+      });
+    }
 
     await logAudit({
       userId,

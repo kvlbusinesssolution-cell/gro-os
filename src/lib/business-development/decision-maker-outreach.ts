@@ -141,11 +141,15 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
           jobTitle,
         });
 
-        // Log the found email as auditable CompanyEvidence — "why do we
-        // have this email" traces back to a real, timestamped source.
-        await prisma.companyEvidence.create({
+        // Log the found email as auditable ContactEvidence — "why do we
+        // have this email" traces back to a real, timestamped source. This
+        // is a fact ABOUT the contact (their email), not about the
+        // company, so it belongs on ContactEvidence — a Phase 26 fix; this
+        // previously wrote to CompanyEvidence, which meant "what's the
+        // evidence for this contact's email" had no real query path.
+        await prisma.contactEvidence.create({
           data: {
-            companyId: company.id,
+            contactId: contact.id,
             kind: "RAW_FACT",
             fact: `Publicly listed email found for ${decisionMaker.name} (${jobTitle}): ${extraction.parsed.email}${
               extraction.parsed.sourceDescription ? ` — ${extraction.parsed.sourceDescription}` : ""
@@ -153,6 +157,7 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
             source: "WEB_SEARCH",
             sourceUrl: extraction.parsed.sourceUrl,
             confidence: extraction.parsed.confidence,
+            fieldName: "email",
           },
         });
 

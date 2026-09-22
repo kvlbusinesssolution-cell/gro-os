@@ -73,7 +73,7 @@ describe("syncCompanyTechnologiesFromScan", () => {
 
   it("returns zeros and leaves Company.technologies untouched for a scan that doesn't exist", async () => {
     const result = await syncCompanyTechnologiesFromScan(companyId, "nonexistent-scan-id");
-    expect(result).toEqual({ detected: 0, evidenceCreated: 0 });
+    expect(result).toEqual({ detected: 0, evidenceCreated: 0, scalarUpdated: false });
 
     const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
     expect(company.technologies).toEqual(["Stale Old Tech"]);
@@ -83,6 +83,7 @@ describe("syncCompanyTechnologiesFromScan", () => {
     const result = await syncCompanyTechnologiesFromScan(companyId, websiteScanId);
     expect(result.detected).toBe(4);
     expect(result.evidenceCreated).toBe(4);
+    expect(result.scalarUpdated).toBe(true);
 
     const company = await prisma.company.findUniqueOrThrow({ where: { id: companyId } });
     expect(new Set(company.technologies)).toEqual(new Set(["Razorpay", "Calendly", "WhatsApp Click-to-Chat", "Zoho CRM"]));
@@ -121,5 +122,57 @@ describe("syncCompanyTechnologiesFromScan", () => {
 
     const after = await prisma.companyEvidence.count({ where: { companyId } });
     expect(after).toBe(before);
+  });
+
+  // Phase 26 (requirement #7, wire conflict resolution into a real write
+  // path) — a real, higher-priority MANUAL source on file must not be
+  // silently overwritten by a lower-priority automated WEBSITE_SCAN.
+  describe("conflict resolution — a real MANUAL evidence entry blocks a lower-priority scan overwrite", () => {
+    let manualCompanyId: string;
+    let manualScanId: string;
+
+    beforeAll(async () => {
+      const company = await prisma.company.create({
+        data: { organizationId, name: "Manually Curated Co", website: "https://manually-curated.example.com", technologies: ["Human-Verified Stack"] },
+      });
+      manualCompanyId = company.id;
+
+      // Real MANUAL-source evidence already on file for this field — the
+      // exact shape companies/actions.ts's updateCompany now writes.
+      await prisma.companyEvidence.create({
+        data: {
+          companyId: manualCompanyId,
+          kind: "RAW_FACT",
+          fact: "Technologies manually set to: Human-Verified Stack.",
+          source: "MANUAL",
+          confidence: 1.0,
+          fieldName: "technologies",
+          verificationStatus: "USER_VERIFIED",
+        },
+      });
+
+      const scan = await prisma.websiteScan.create({
+        data: { organizationId, companyId: manualCompanyId, createdByUserId: userId, url: "https://manually-curated.example.com", status: "COMPLETED", scannedAt: new Date() },
+      });
+      manualScanId = scan.id;
+      await prisma.technology.create({ data: { scanId: manualScanId, name: "Different Detected Tech", category: "OTHER", evidence: 'HTML contains "different-tech-signature"' } });
+    });
+
+    afterAll(async () => {
+      await prisma.company.delete({ where: { id: manualCompanyId } });
+    });
+
+    it("does not overwrite Company.technologies when a real MANUAL entry already backs the field", async () => {
+      const result = await syncCompanyTechnologiesFromScan(manualCompanyId, manualScanId);
+      expect(result.scalarUpdated).toBe(false);
+      // The observation is still recorded as real evidence — never lost.
+      expect(result.evidenceCreated).toBe(1);
+
+      const company = await prisma.company.findUniqueOrThrow({ where: { id: manualCompanyId } });
+      expect(company.technologies).toEqual(["Human-Verified Stack"]); // untouched by the lower-priority scan
+
+      const scanEvidence = await prisma.companyEvidence.findFirst({ where: { companyId: manualCompanyId, source: "WEBSITE_SCAN" } });
+      expect(scanEvidence?.fact).toContain("Different Detected Tech"); // the real detection was still preserved
+    });
   });
 });

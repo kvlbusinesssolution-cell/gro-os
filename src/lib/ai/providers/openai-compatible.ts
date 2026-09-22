@@ -1,6 +1,7 @@
 import { generateStructuredViaJsonMode } from "./json-mode";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredResponse, ProviderTextRequest, ProviderTextResponse } from "./types";
 import type { AIUsageProvider } from "@/generated/prisma/client";
+import { ProviderHttpError, parseRetryAfterMs } from "./provider-error";
 
 /**
  * Shared implementation for the three providers in the chain that speak the
@@ -71,7 +72,7 @@ export function createOpenAICompatibleProvider(config: {
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} from ${config.id}: ${body.slice(0, 500)}`);
+      throw new ProviderHttpError(`HTTP ${res.status} from ${config.id}: ${body.slice(0, 500)}`, res.status, parseRetryAfterMs(res.headers.get("retry-after")));
     }
 
     const data = (await res.json()) as {
