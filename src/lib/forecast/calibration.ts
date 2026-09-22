@@ -104,3 +104,74 @@ export async function runForecastCalibrationForOrg(organizationId: string): Prom
 export function getLatestForecastCalibration(organizationId: string) {
   return prisma.forecastCalibration.findFirst({ where: { organizationId, subject: "DEAL_PROBABILITY" }, orderBy: { computedAt: "desc" } });
 }
+
+export interface DriftResult {
+  hasEnoughHistory: boolean;
+  previousVerdict: CalibrationResult["verdict"] | null;
+  currentVerdict: CalibrationResult["verdict"] | null;
+  previousAvgGap: number | null;
+  currentAvgGap: number | null;
+  /** Real difference between the two most recent runs' avg gap — null until 2 real runs exist. */
+  gapDelta: number | null;
+  driftDetected: boolean;
+  summary: string;
+}
+
+function avgGapFromBands(bands: CalibrationBand[]): number | null {
+  const withData = bands.filter((b) => b.sampleSize > 0 && b.actualWinRate !== null && b.avgPredictedProbability !== null);
+  if (withData.length === 0) return null;
+  const totalSample = withData.reduce((s, b) => s + b.sampleSize, 0);
+  return withData.reduce((sum, b) => sum + (b.avgPredictedProbability! - b.actualWinRate!) * b.sampleSize, 0) / totalSample;
+}
+
+/**
+ * Phase 29 — drift check. Reuses ForecastCalibration's real, already-
+ * existing append-only history (runForecastCalibrationForOrg's own "never
+ * upserted" convention, unchanged) rather than building new data
+ * collection: compares the two most recent real calibration runs' avg gap.
+ * A shift of more than 15 points (double FORECAST_CONFIG's own
+ * WELL_CALIBRATED tolerance) between consecutive real runs is flagged as
+ * real drift — never inferred from a single run.
+ */
+export async function computeForecastCalibrationDrift(organizationId: string): Promise<DriftResult> {
+  const runs = await prisma.forecastCalibration.findMany({
+    where: { organizationId, subject: "DEAL_PROBABILITY" },
+    orderBy: { computedAt: "desc" },
+    take: 2,
+  });
+
+  if (runs.length < 2) {
+    return {
+      hasEnoughHistory: false,
+      previousVerdict: null,
+      currentVerdict: (runs[0]?.verdict as CalibrationResult["verdict"]) ?? null,
+      previousAvgGap: null,
+      currentAvgGap: null,
+      gapDelta: null,
+      driftDetected: false,
+      summary: `Only ${runs.length} real calibration run(s) exist — at least 2 are required to compare drift over time. INSUFFICIENT_DATA.`,
+    };
+  }
+
+  const [current, previous] = runs;
+  const currentAvgGap = avgGapFromBands(current!.bandsJson as unknown as CalibrationBand[]);
+  const previousAvgGap = avgGapFromBands(previous!.bandsJson as unknown as CalibrationBand[]);
+  const gapDelta = currentAvgGap !== null && previousAvgGap !== null ? currentAvgGap - previousAvgGap : null;
+  const driftDetected = gapDelta !== null && Math.abs(gapDelta) > 0.15;
+
+  return {
+    hasEnoughHistory: true,
+    previousVerdict: previous!.verdict as CalibrationResult["verdict"],
+    currentVerdict: current!.verdict as CalibrationResult["verdict"],
+    previousAvgGap,
+    currentAvgGap,
+    gapDelta,
+    driftDetected,
+    summary:
+      gapDelta === null
+        ? "Real calibration history exists for 2 runs, but at least one has no populated band to compute a gap from — INSUFFICIENT_DATA for a drift verdict."
+        : driftDetected
+          ? `Calibration gap shifted by ${gapDelta >= 0 ? "+" : ""}${Math.round(gapDelta * 100)} points between the last 2 real runs (${previous!.verdict} → ${current!.verdict}) — real drift detected, model may need review.`
+          : `Calibration gap shifted by only ${gapDelta >= 0 ? "+" : ""}${Math.round(gapDelta * 100)} points between the last 2 real runs — no meaningful drift.`,
+  };
+}

@@ -11,9 +11,14 @@
  * Application/Event system.
  *
  * §17 (CRITICAL) — every result below is explicitly labeled ACTUAL,
- * OBSERVATION, or RECOMMENDATION (never PREDICTION here — this module makes
- * no forward-looking numeric estimates; see career-insights.ts for the one
- * place PREDICTION-labeled text appears). An OBSERVATION never claims a
+ * OBSERVATION, or RECOMMENDATION — this module itself makes no
+ * forward-looking numeric estimates. Phase 29 added real, dedicated
+ * `kind: "PREDICTION"` functions (src/lib/career/career-predictions.ts —
+ * application-response/interview/offer/match-to-response likelihood) that
+ * blend this module's real classifySampleSize/classifyConfidence/rate data
+ * with a forward-looking case rather than adding PREDICTION output here,
+ * to keep this file's own scope (real historical rear-facing observations)
+ * unchanged. An OBSERVATION never claims a
  * cause; see `describeObservation` below — every sentence this module
  * generates is grammatically an association ("was associated with"), never
  * a causal claim ("caused").

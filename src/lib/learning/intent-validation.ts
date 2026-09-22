@@ -31,6 +31,10 @@ export interface IntentValidationResult {
   falsePositives: Array<{ observationId: string; companyId: string | null; intentScore: number | null; intentBand: string | null; outcome: string }>;
   falseNegatives: Array<{ observationId: string; companyId: string | null; intentScore: number | null; intentBand: string | null; outcome: string }>;
   calibrated: boolean | null;
+  /** TP = HIGH band & WON. Null below the same decided-sample gate as `calibrated` — never computed from a tiny/zero denominator. */
+  precision: number | null;
+  /** TP = HIGH band & WON; FN = LOW/NONE band & WON. Same null-gating as precision. */
+  recall: number | null;
   summary: string;
 }
 
@@ -78,6 +82,21 @@ export async function computeIntentValidation(organizationId: string): Promise<I
   const totalDecided = observations.filter((o) => o.outcome === "WON" || o.outcome === "LOST").length;
   const calibrated = totalDecided < LEARNING_CONFIG.MIN_SAMPLE_INSUFFICIENT ? null : bandsAreOrdered(bands);
 
+  // §MEASURE — formal precision/recall from the real TP/FP/FN counts
+  // already computed above. TP = predicted HIGH intent, real WON outcome.
+  // FP (for precision) restricted to the real decided LOST case (not
+  // NO_RESPONSE, which isn't a real negative-outcome decision) so the ratio
+  // stays well-defined. Same INSUFFICIENT_DATA gate as `calibrated`.
+  let precision: number | null = null;
+  let recall: number | null = null;
+  if (totalDecided >= LEARNING_CONFIG.MIN_SAMPLE_INSUFFICIENT) {
+    const truePositives = observations.filter((o) => o.intentBand === "HIGH" && o.outcome === "WON").length;
+    const falsePositivesDecided = observations.filter((o) => o.intentBand === "HIGH" && o.outcome === "LOST").length;
+    const falseNegativesCount = falseNegatives.length; // already WON-only by construction above
+    precision = truePositives + falsePositivesDecided > 0 ? truePositives / (truePositives + falsePositivesDecided) : null;
+    recall = truePositives + falseNegativesCount > 0 ? truePositives / (truePositives + falseNegativesCount) : null;
+  }
+
   const summary =
     totalDecided < LEARNING_CONFIG.MIN_SAMPLE_INSUFFICIENT
       ? `Only ${totalDecided} decided (won/lost) observation(s) with a known intent band exist — INSUFFICIENT DATA to judge whether IntentScore is calibrated.`
@@ -85,7 +104,7 @@ export async function computeIntentValidation(organizationId: string): Promise<I
         ? `Across ${totalDecided} decided observations, higher intent bands show a higher observed win rate — consistent with (not proof of) IntentScore being calibrated. ${falsePositives.length} false positive(s) and ${falseNegatives.length} false negative(s) found.`
         : `Across ${totalDecided} decided observations, win rate does NOT increase monotonically with intent band — IntentScore appears mis-calibrated for this cohort, or the sample is still too noisy to tell. ${falsePositives.length} false positive(s) and ${falseNegatives.length} false negative(s) found.`;
 
-  return { sampleSize: observations.length, bands, falsePositives, falseNegatives, calibrated, summary };
+  return { sampleSize: observations.length, bands, falsePositives, falseNegatives, calibrated, precision, recall, summary };
 }
 
 function bandsAreOrdered(bands: IntentValidationBand[]): boolean {

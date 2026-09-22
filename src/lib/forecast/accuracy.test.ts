@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { prisma } from "@/lib/prisma";
 import { computeForecastAccuracy } from "./accuracy";
-import { computeDealProbabilityCalibration } from "./calibration";
+import { computeDealProbabilityCalibration, computeForecastCalibrationDrift } from "./calibration";
 import { FORECAST_CONFIG } from "./config";
 
 /**
@@ -91,6 +91,38 @@ describe("forecast accuracy and calibration math", () => {
     } finally {
       await prisma.predictionSnapshot.deleteMany({ where: { organizationId: orgId3 } });
       await prisma.organization.delete({ where: { id: orgId3 } });
+    }
+  });
+
+  it("drift check reports INSUFFICIENT_DATA (not a fabricated verdict) with fewer than 2 real calibration runs", async () => {
+    const orgId4 = (await prisma.organization.create({ data: { name: "Drift Test Org Zero", slug: `drift-test-zero-${Date.now()}` } })).id;
+    try {
+      const result = await computeForecastCalibrationDrift(orgId4);
+      expect(result.hasEnoughHistory).toBe(false);
+      expect(result.driftDetected).toBe(false);
+      expect(result.gapDelta).toBeNull();
+    } finally {
+      await prisma.organization.delete({ where: { id: orgId4 } });
+    }
+  });
+
+  it("drift check detects a real shift between 2 consecutive real calibration runs, never inferred from a single run", async () => {
+    const orgId5 = (await prisma.organization.create({ data: { name: "Drift Test Org", slug: `drift-test-${Date.now()}` } })).id;
+    try {
+      const wellCalibratedBands = [{ label: "60-80%", min: 0.6, max: 0.8, sampleSize: 10, wonCount: 7, actualWinRate: 0.7, avgPredictedProbability: 0.7 }];
+      const overconfidentBands = [{ label: "60-80%", min: 0.6, max: 0.8, sampleSize: 10, wonCount: 2, actualWinRate: 0.2, avgPredictedProbability: 0.7 }];
+      await prisma.forecastCalibration.create({ data: { organizationId: orgId5, subject: "DEAL_PROBABILITY", sampleSize: 10, bandsJson: wellCalibratedBands, verdict: "WELL_CALIBRATED", summary: "test run 1", computedAt: new Date(Date.now() - 86_400_000) } });
+      await prisma.forecastCalibration.create({ data: { organizationId: orgId5, subject: "DEAL_PROBABILITY", sampleSize: 10, bandsJson: overconfidentBands, verdict: "OVERCONFIDENT", summary: "test run 2" } });
+
+      const result = await computeForecastCalibrationDrift(orgId5);
+      expect(result.hasEnoughHistory).toBe(true);
+      expect(result.previousVerdict).toBe("WELL_CALIBRATED");
+      expect(result.currentVerdict).toBe("OVERCONFIDENT");
+      expect(result.gapDelta).toBeCloseTo(0.5, 5); // (0.7-0.2) - (0.7-0.7) = 0.5
+      expect(result.driftDetected).toBe(true);
+    } finally {
+      await prisma.forecastCalibration.deleteMany({ where: { organizationId: orgId5 } });
+      await prisma.organization.delete({ where: { id: orgId5 } });
     }
   });
 });

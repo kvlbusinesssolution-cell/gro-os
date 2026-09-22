@@ -29,6 +29,10 @@ export interface PriorityValidationResult {
   lowPriorityWinRate: number | null;
   falsePositives: PriorityValidationRow[];
   falseNegatives: PriorityValidationRow[];
+  /** TP = HOT/HIGH priority & WON. Null below the same decided-sample gate the summary uses. */
+  precision: number | null;
+  /** TP = HOT/HIGH priority & WON; FN = LOW/NURTURE priority & WON. */
+  recall: number | null;
   summary: string;
   limitation: string;
 }
@@ -59,6 +63,19 @@ export async function computePriorityValidation(organizationId: string): Promise
   const falsePositives = rows.filter((r) => r.priority && HIGH_PRIORITY.has(r.priority) && (r.outcome === "LOST" || r.outcome === "NO_RESPONSE"));
   const falseNegatives = rows.filter((r) => r.priority && LOW_PRIORITY.has(r.priority) && r.outcome === "WON");
 
+  // §MEASURE — formal precision/recall from the real TP/FP/FN rows already
+  // computed above. FP restricted to real decided LOST (not NO_RESPONSE)
+  // so the ratio stays well-defined, same convention as intent-validation.ts.
+  let precision: number | null = null;
+  let recall: number | null = null;
+  if (decided.length >= LEARNING_CONFIG.MIN_SAMPLE_INSUFFICIENT) {
+    const truePositives = highDecided.filter((r) => r.outcome === "WON").length;
+    const falsePositivesDecided = highDecided.filter((r) => r.outcome === "LOST").length;
+    const falseNegativesCount = falseNegatives.length; // already WON-only by construction above
+    precision = truePositives + falsePositivesDecided > 0 ? truePositives / (truePositives + falsePositivesDecided) : null;
+    recall = truePositives + falseNegativesCount > 0 ? truePositives / (truePositives + falseNegativesCount) : null;
+  }
+
   const summary =
     decided.length < LEARNING_CONFIG.MIN_SAMPLE_INSUFFICIENT
       ? `Only ${decided.length} decided (won/lost) opportunity outcome(s) exist — INSUFFICIENT DATA to judge whether priority scoring is calibrated.`
@@ -71,6 +88,8 @@ export async function computePriorityValidation(organizationId: string): Promise
     lowPriorityWinRate: lowDecided.length > 0 ? lowDecided.filter((r) => r.outcome === "WON").length / lowDecided.length : null,
     falsePositives,
     falseNegatives,
+    precision,
+    recall,
     summary,
     limitation: "Priority reflects LeadOpportunity's current value, not a timestamped snapshot from before the outcome was known — this schema has no such history beyond the one-step-back previousOpportunityScore field.",
   };
