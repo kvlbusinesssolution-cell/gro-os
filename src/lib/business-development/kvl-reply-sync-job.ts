@@ -4,7 +4,7 @@ import { simpleParser } from "mailparser";
 import { prisma } from "@/lib/prisma";
 import { logReplyCore } from "@/app/dashboard/outreach/_lib/reply-actions";
 import { applyReplyAutomation } from "@/lib/outreach/reply-automation";
-import { resolveKvlOrganizationId, KVL_OWNER_EMAIL, KVL_OWNER_REPORT_EMAIL, KVL_OUTREACH_CAMPAIGN_NAME } from "./kvl-sector-discovery-job";
+import { resolveKvlOrganizationIds, KVL_OWNER_EMAILS, KVL_OWNER_REPORT_EMAIL, KVL_OUTREACH_CAMPAIGN_NAME } from "./kvl-sector-discovery-job";
 import { initiateRateNegotiation, completeRateNegotiationAfterOwnerReply } from "./rate-negotiation";
 import type { JobRunLog } from "@/lib/scheduler/types";
 
@@ -60,13 +60,26 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
     return [{ level: "warn", message: "Skipped — KVL_IMAP_HOST/KVL_IMAP_USER/KVL_IMAP_PASSWORD not configured yet." }];
   }
 
-  const organizationId = await resolveKvlOrganizationId();
-  if (!organizationId) return [{ level: "warn", message: `Skipped — no active OWNER membership found for ${KVL_OWNER_EMAIL}.` }];
+  // Only one real IMAP mailbox is configured, but it can receive replies to
+  // outreach sent from EITHER real KVL-owned org (owner request, 2026-09-22
+  // — see kvl-sector-discovery-job.ts's header comment). Real per-message
+  // org attribution happens below via which org's Contact table the sender
+  // address actually matches, not a single hardcoded org.
+  const organizationIds = await resolveKvlOrganizationIds();
+  if (organizationIds.length === 0) return [{ level: "warn", message: `Skipped — no active OWNER membership found for any of: ${KVL_OWNER_EMAILS.join(", ")}.` }];
 
-  const owner = await prisma.user.findUnique({ where: { email: KVL_OWNER_EMAIL }, select: { id: true } });
-  if (!owner) return [{ level: "warn", message: `Skipped — no user found for ${KVL_OWNER_EMAIL}.`, organizationId }];
-
-  const campaign = await prisma.campaign.findFirst({ where: { organizationId, name: KVL_OUTREACH_CAMPAIGN_NAME } });
+  const orgContexts = new Map<string, { ownerId: string; campaignId: string | null }>();
+  for (const organizationId of organizationIds) {
+    const ownerMembership = await prisma.membership.findFirst({
+      where: { organizationId, status: "ACTIVE", role: "OWNER" },
+      orderBy: { createdAt: "asc" },
+      select: { userId: true },
+    });
+    if (!ownerMembership) continue;
+    const campaign = await prisma.campaign.findFirst({ where: { organizationId, name: KVL_OUTREACH_CAMPAIGN_NAME } });
+    orgContexts.set(organizationId, { ownerId: ownerMembership.userId, campaignId: campaign?.id ?? null });
+  }
+  if (orgContexts.size === 0) return [{ level: "warn", message: "Skipped — no resolvable active OWNER membership for any KVL organization." }];
 
   const logs: JobRunLog[] = [];
   const client = new ImapFlow({
@@ -84,7 +97,7 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
   try {
     await client.connect();
   } catch (error) {
-    return [{ level: "error", message: `IMAP connect failed: ${error instanceof Error ? error.message : String(error)}`, organizationId }];
+    return [{ level: "error", message: `IMAP connect failed: ${error instanceof Error ? error.message : String(error)}` }];
   }
 
   try {
@@ -92,10 +105,14 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
     try {
       const uids = await client.search({ seen: false }, { uid: true });
       if (!uids || uids.length === 0) {
-        return [{ level: "info", message: "No new (unseen) messages in the inbox.", organizationId }];
+        return [{ level: "info", message: "No new (unseen) messages in the inbox." }];
       }
 
       for (const uid of uids) {
+        // Declared here (not inside the try) so the catch below can still
+        // report a real org id if this message's org was already resolved
+        // before something later in the same iteration threw.
+        let organizationId: string | undefined;
         try {
           const message = await client.fetchOne(uid, { source: true, envelope: true }, { uid: true });
           if (!message || !message.source) continue;
@@ -115,35 +132,50 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
           // email this job's sibling flow sent from this same address), so
           // an incoming message FROM the owner's own report address is
           // never a client reply — it's the owner's real decision on the
-          // most recent still-open negotiation thread for this org. Single
-          // owner, single open thread at a time is a fair real-world
-          // assumption for KVL's own team size; documented, not hidden.
+          // most recent still-open negotiation thread across EITHER real
+          // KVL org. Single owner, single open thread at a time (per org)
+          // is a fair real-world assumption for KVL's own team size;
+          // documented, not hidden.
           if (fromAddress === KVL_OWNER_REPORT_EMAIL.toLowerCase()) {
             const negotiation = await prisma.rateNegotiation.findFirst({
-              where: { organizationId, status: "AWAITING_OWNER" },
+              where: { organizationId: { in: [...orgContexts.keys()] }, status: "AWAITING_OWNER" },
               orderBy: { createdAt: "desc" },
             });
             if (negotiation) {
               const result = await completeRateNegotiationAfterOwnerReply(negotiation.id, bodyText);
               if (result.ok) {
-                logs.push({ level: "info", message: `Owner's rate decision captured for negotiation ${negotiation.id} — reply-to-client draft ${result.draftId} and closing meeting ${result.meetingId} created.`, organizationId });
+                logs.push({ level: "info", message: `Owner's rate decision captured for negotiation ${negotiation.id} — reply-to-client draft ${result.draftId} and closing meeting ${result.meetingId} created.`, organizationId: negotiation.organizationId });
               } else {
-                logs.push({ level: "error", message: `Failed to complete rate negotiation ${negotiation.id}: ${result.error}`, organizationId });
+                logs.push({ level: "error", message: `Failed to complete rate negotiation ${negotiation.id}: ${result.error}`, organizationId: negotiation.organizationId });
               }
             } else {
-              logs.push({ level: "info", message: `Owner replied from ${fromAddress} but no negotiation is currently AWAITING_OWNER — treated as a normal owner email, not logged as a client reply.`, organizationId });
+              logs.push({ level: "info", message: `Owner replied from ${fromAddress} but no negotiation is currently AWAITING_OWNER in any KVL org — treated as a normal owner email, not logged as a client reply.` });
             }
             await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
             continue;
           }
 
-          const contact = await prisma.contact.findFirst({ where: { organizationId, email: fromAddress } });
+          // Real per-message org attribution: a reply could be to either
+          // KVL org's outreach, so match the sender against whichever org's
+          // Contact table actually has them, rather than assuming a single
+          // hardcoded org.
+          const contact = await prisma.contact.findFirst({ where: { organizationId: { in: [...orgContexts.keys()] }, email: fromAddress } });
           if (!contact) {
             unmatchedCount += 1;
-            logs.push({ level: "info", message: `No matching contact for reply from ${fromAddress} — marked read, not logged.`, organizationId });
+            logs.push({ level: "info", message: `No matching contact for reply from ${fromAddress} in any KVL org — marked read, not logged.` });
             await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
             continue;
           }
+          organizationId = contact.organizationId;
+          const orgCtx = orgContexts.get(organizationId);
+          if (!orgCtx) {
+            // Should be unreachable (contact was matched via the same org id list), but never silently drop a real reply.
+            errorCount += 1;
+            logs.push({ level: "error", message: `Matched contact ${contact.id} but its org ${organizationId} has no resolved owner/campaign context — skipped.`, organizationId });
+            await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });
+            continue;
+          }
+          const { ownerId: ownerIdForOrg, campaignId: campaignIdForOrg } = orgCtx;
 
           // Idempotency backstop for the dedup gap the mailbox's own \Seen
           // flag can't close on its own: if this job crashes (or
@@ -163,11 +195,11 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
             continue;
           }
 
-          const latestDraft = campaign
-            ? await prisma.emailDraft.findFirst({ where: { contactId: contact.id, campaignId: campaign.id, status: "SENT" }, orderBy: { sentAt: "desc" } })
+          const latestDraft = campaignIdForOrg
+            ? await prisma.emailDraft.findFirst({ where: { contactId: contact.id, campaignId: campaignIdForOrg, status: "SENT" }, orderBy: { sentAt: "desc" } })
             : null;
 
-          const result = await logReplyCore(organizationId, owner.id, contact.id, bodyText, "EMAIL", latestDraft?.id, parsed.date ?? undefined);
+          const result = await logReplyCore(organizationId, ownerIdForOrg, contact.id, bodyText, "EMAIL", latestDraft?.id, parsed.date ?? undefined);
           if (result.ok) {
             loggedCount += 1;
             logs.push({ level: "info", message: `Logged real reply from ${fromAddress} (${contact.firstName}) — sentiment: ${result.sentiment ?? "unclassified"}.`, organizationId });
@@ -220,8 +252,7 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
 
   logs.push({
     level: "info",
-    message: `Reply sync done — ${loggedCount} real repl${loggedCount === 1 ? "y" : "ies"} logged, ${unmatchedCount} unmatched sender(s), ${errorCount} error(s).`,
-    organizationId,
+    message: `Reply sync done (across ${orgContexts.size} KVL org(s)) — ${loggedCount} real repl${loggedCount === 1 ? "y" : "ies"} logged, ${unmatchedCount} unmatched sender(s), ${errorCount} error(s).`,
   });
   return logs;
 }

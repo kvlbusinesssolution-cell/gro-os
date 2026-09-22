@@ -58,6 +58,17 @@ export interface AIProviderAdapter {
   readonly model: string;
   /** Pure env-var/config presence check — no network call. */
   isConfigured(): boolean;
+  /**
+   * True only for a provider with a real, live web-search tool wired in
+   * this codebase (currently Anthropic only — see anthropic-provider.ts's
+   * `web_search_20250305` tool). Used by fallback.ts's runChain to
+   * reorder a `webSearch`-requesting call so a real-search-capable
+   * provider is tried before a provider that would otherwise "succeed"
+   * with a plausible-looking but non-current, non-grounded answer and
+   * short-circuit the chain before it ever reaches a provider that can
+   * actually search. Providers that don't declare this default to false.
+   */
+  readonly supportsWebSearch?: boolean;
   generateText(req: ProviderTextRequest): Promise<ProviderTextResponse>;
   generateStructured<T>(req: ProviderStructuredRequest<T>): Promise<ProviderStructuredResponse<T>>;
 }

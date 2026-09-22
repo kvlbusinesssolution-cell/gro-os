@@ -68,13 +68,37 @@ export interface FallbackQueueContext {
   context: string;
 }
 
+/**
+ * Real, live web search only works through a provider whose adapter
+ * declares `supportsWebSearch: true` (currently Anthropic alone — see
+ * types.ts's doc comment). PROVIDER_CHAIN's normal cost-driven order
+ * (paid-first) is wrong for a `webSearch`-requesting call: Gemini/OpenAI
+ * would "succeed" with a plausible-looking but non-current, non-grounded
+ * answer and short-circuit the chain (runChain returns on first success)
+ * before ever reaching the one provider that can actually search — this is
+ * exactly what silently starved KVL's lead-discovery job once Gemini's
+ * billing lapsed (2026-09-22 root cause). For a search-requiring call, this
+ * moves every supportsWebSearch provider ahead of the rest, preserving
+ * PROVIDER_CHAIN's relative order within each group — a real search
+ * attempt is always made first when one is possible, and the existing
+ * non-search graceful-degradation fallback is still reached afterward if
+ * every real-search provider is unavailable.
+ */
+export function chainOrderFor(requiresWebSearch: boolean): AIProviderAdapter[] {
+  if (!requiresWebSearch) return PROVIDER_CHAIN;
+  const searchCapable = PROVIDER_CHAIN.filter((p) => p.supportsWebSearch);
+  const rest = PROVIDER_CHAIN.filter((p) => !p.supportsWebSearch);
+  return [...searchCapable, ...rest];
+}
+
 async function runChain<R extends { inputTokens: number; outputTokens: number }>(
   op: (provider: AIProviderAdapter) => Promise<R>,
   queueOnFailure: (FallbackQueueContext & { req: ProviderTextRequest }) | null,
+  requiresWebSearch = false,
 ): Promise<{ result: R; provider: AIProviderAdapter }> {
   const attempts: { providerId: string; error: string }[] = [];
 
-  for (const provider of PROVIDER_CHAIN) {
+  for (const provider of chainOrderFor(requiresWebSearch)) {
     if (!provider.isConfigured()) continue;
     if (isCoolingDown(provider.id)) continue;
 
@@ -112,7 +136,7 @@ async function runChain<R extends { inputTokens: number; outputTokens: number }>
  * "retried automatically later" instead of a hard, final failure.
  */
 export async function generateText(req: ProviderTextRequest, queue?: FallbackQueueContext): Promise<FallbackTextResult> {
-  const { result, provider } = await runChain((p) => p.generateText(req), queue ? { ...queue, req } : null);
+  const { result, provider } = await runChain((p) => p.generateText(req), queue ? { ...queue, req } : null, !!req.webSearch);
   return { text: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens, provider: provider.id, model: provider.model };
 }
 
@@ -124,7 +148,7 @@ export async function generateText(req: ProviderTextRequest, queue?: FallbackQue
  * failure — see fallback-queue.ts's doc comment for why.
  */
 export async function generateStructured<T>(req: ProviderStructuredRequest<T> & { schema: ZodType<T> }): Promise<FallbackStructuredResult<T>> {
-  const { result, provider } = await runChain((p) => p.generateStructured(req), null);
+  const { result, provider } = await runChain((p) => p.generateStructured(req), null, !!req.webSearch);
   return {
     text: result.text,
     inputTokens: result.inputTokens,
@@ -138,4 +162,9 @@ export async function generateStructured<T>(req: ProviderStructuredRequest<T> & 
 /** True if at least one provider in the chain (paid or free) has credentials configured. */
 export function isAnyAIProviderConfigured(): boolean {
   return PROVIDER_CHAIN.some((p) => p.isConfigured());
+}
+
+/** True when `providerId` is one that actually performed real, live web search for a `webSearch`-requesting call — callers like runWebSearchDiscovery use this on the returned `provider` field to tell a real, current search from a same-shaped-but-ungrounded fallback answer. */
+export function providerSupportsWebSearch(providerId: AIUsageProvider): boolean {
+  return PROVIDER_CHAIN.some((p) => p.id === providerId && p.supportsWebSearch);
 }

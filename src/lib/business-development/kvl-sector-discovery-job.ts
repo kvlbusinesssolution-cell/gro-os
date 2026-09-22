@@ -12,29 +12,45 @@ import { injectTracking, getAppBaseUrl } from "@/lib/outreach/tracking";
 import type { JobRunLog } from "@/lib/scheduler/types";
 import type { Company, AIAgentInstance, PipelineStage } from "@/generated/prisma/client";
 
-import { findOrCreateCompany } from "./dedup";
+import { findOrCreateCompany, normalizeWebsiteHost } from "./dedup";
 
 /**
- * KVL-only lead discovery + outreach, scoped to KVL's own organization only
+ * KVL-only lead discovery + outreach, scoped to KVL's own organizations only
  * (resolved by owner email below) so it never runs unbounded AI-cost work
  * against every tenant on the platform. Distinct from the generic, per-org
  * opt-in `lead-discovery` job (discovery-job.ts, 6am, capped at 3 queries).
+ *
+ * Two real KVL-owned organizations run this pipeline in parallel (owner
+ * request, 2026-09-22): `kamaralamjdu@gmail.com` (the original account) and
+ * `kvlbusinesssolution@gmail.com` (a second real KVL account, upgraded to
+ * ENTERPRISE the same day — see the one-off production data migration run
+ * alongside this change). Every job below (country outreach, daily
+ * catch-up, daily report) loops over BOTH resolved organizations rather
+ * than a single hardcoded one. `isAlreadyTargetedByOtherKvlOrg` (below)
+ * keeps the two from independently discovering/outreaching the SAME real
+ * external company — the whole point of running two is to cover more real
+ * ground, not double-contact the same prospect from two KVL identities.
  *
  * Scheduling (see registry.ts): one job PER TARGET COUNTRY, each firing at
  * 10:30 AM in that country's own local timezone (BullMQ's cron `tz` option —
  * confirmed this is the active scheduler provider, see scheduler/init.ts —
  * genuinely evaluates the cron pattern in the given zone), so outreach to a
  * given country always starts when that country's business day starts, not
- * at a fixed IST time. A separate daily catch-up job (8pm IST) tops up to
- * the DAILY_MIN floor if the day's country runs came in short, and a daily
- * report job (9pm IST) emails the owner a real send/open/click summary —
+ * at a fixed IST time. A separate daily catch-up job (8pm IST) tops up each
+ * country independently to the DAILY_MIN_PER_COUNTRY floor if that day's
+ * country run came in short, and a daily
+ * report job (9pm IST) emails both owners a real send/open/click summary —
  * see runKvlCountryOutreach / runKvlDailyCatchup / sendKvlDailyReport below.
  */
 export const KVL_OWNER_EMAIL = "kamaralamjdu@gmail.com";
-const DIGEST_RECIPIENTS = ["kvlbusinesssolution@gmail.com"];
-/** Same inbox the daily report already goes to — reused as the one real address the owner reads and replies from for the rate-negotiation escalation (rate-negotiation.ts / kvl-reply-sync-job.ts). */
-export const KVL_OWNER_REPORT_EMAIL = DIGEST_RECIPIENTS[0];
-const DAILY_MIN = 20;
+/** Both real KVL-owned accounts this pipeline runs for — see header comment above. Order matters only in that KVL_OWNER_EMAIL (index 0) stays the single org admin/email/page.tsx resolves via resolveKvlOrganizationId(). */
+export const KVL_OWNER_EMAILS = [KVL_OWNER_EMAIL, "kvlbusinesssolution@gmail.com"] as const;
+/** The one real IMAP-polled inbox (KVL_IMAP_* env vars) — unchanged by the multi-owner change above, since only one real mailbox is configured. */
+export const KVL_OWNER_REPORT_EMAIL = "kvlbusinesssolution@gmail.com";
+/** Daily report now goes to both real owner inboxes (owner request, 2026-09-22) — previously only KVL_OWNER_REPORT_EMAIL. */
+const DIGEST_RECIPIENTS = [KVL_OWNER_EMAIL, KVL_OWNER_REPORT_EMAIL];
+/** Owner request (2026-09-22): the 20/day floor is PER COUNTRY, not a single global total — see runKvlDailyCatchup. */
+const DAILY_MIN_PER_COUNTRY = 20;
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 /** Owner-confirmed real monthly revenue target (set 2026-09-17), in INR — reported in the daily owner report against real won-deal value so far this calendar month. */
 const KVL_MONTHLY_REVENUE_TARGET_INR = 600_000;
@@ -153,6 +169,9 @@ const COUNTRY_GROUPS: { key: string; label: string; timezone: string; countryNam
   { key: "malaysia", label: "Malaysia", timezone: "Asia/Kuala_Lumpur", countryNames: ["Malaysia"] },
 ];
 
+/** The real combined daily target across all 6 country groups (20 × 6 = 120) — used only for display in the daily report/summary card; the actual floor enforced by runKvlDailyCatchup is DAILY_MIN_PER_COUNTRY, independently per country. */
+const DAILY_TARGET_TOTAL = DAILY_MIN_PER_COUNTRY * COUNTRY_GROUPS.length;
+
 type OutreachStatus = "sent" | "failed" | "skipped_no_email" | "already_contacted";
 
 interface FoundCompany {
@@ -254,6 +273,7 @@ async function autoOutreachToCompany(organizationId: string, campaignId: string,
   }
 }
 
+/** Resolves the single primary KVL org (KVL_OWNER_EMAIL only) — kept for the one existing single-org viewer, src/app/admin/email/page.tsx, which deliberately never grows into a cross-tenant/cross-org viewer. Job handlers below use resolveKvlOrganizationIds() instead. */
 export async function resolveKvlOrganizationId(): Promise<string | null> {
   const user = await prisma.user.findUnique({ where: { email: KVL_OWNER_EMAIL }, select: { id: true } });
   if (!user) return null;
@@ -265,21 +285,69 @@ export async function resolveKvlOrganizationId(): Promise<string | null> {
   return membership?.organizationId ?? null;
 }
 
+/** Resolves every real KVL-owned organization (KVL_OWNER_EMAILS) with an active OWNER membership — skips any owner email with no matching user/membership rather than failing the whole run. */
+export async function resolveKvlOrganizationIds(): Promise<string[]> {
+  const organizationIds: string[] = [];
+  for (const email of KVL_OWNER_EMAILS) {
+    const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+    if (!user) continue;
+    const membership = await prisma.membership.findFirst({
+      where: { userId: user.id, role: "OWNER", status: "ACTIVE" },
+      orderBy: { createdAt: "asc" },
+      select: { organizationId: true },
+    });
+    if (membership) organizationIds.push(membership.organizationId);
+  }
+  return organizationIds;
+}
+
+/**
+ * True when a company with the same real identity (website host first,
+ * case-insensitive; falling back to an exact case-insensitive name match)
+ * already exists in one of the OTHER KVL-owned orgs' Company tables. Keeps
+ * the two real KVL accounts from independently discovering/outreaching the
+ * SAME real external company — each account should cover different real
+ * ground, not double-contact the same prospect under two KVL identities.
+ * Same matching tiers as dedup.ts's findOrCreateCompany, just scoped to
+ * "any of the sibling orgs" instead of "this org" — existing same-org dedup
+ * behavior (findOrCreateCompany itself) is untouched by this function.
+ */
+export async function isAlreadyTargetedByOtherKvlOrg(
+  currentOrganizationId: string,
+  allKvlOrganizationIds: string[],
+  input: { website?: string | null; name: string },
+): Promise<boolean> {
+  const otherOrgIds = allKvlOrganizationIds.filter((id) => id !== currentOrganizationId);
+  if (otherOrgIds.length === 0) return false;
+
+  const normalizedHost = normalizeWebsiteHost(input.website);
+  if (normalizedHost) {
+    const candidates = await prisma.company.findMany({
+      where: { organizationId: { in: otherOrgIds }, website: { not: null } },
+      select: { website: true },
+    });
+    if (candidates.some((c) => normalizeWebsiteHost(c.website) === normalizedHost)) return true;
+  }
+
+  const nameMatch = await prisma.company.findFirst({
+    where: { organizationId: { in: otherOrgIds }, name: { equals: input.name, mode: "insensitive" } },
+    select: { id: true },
+  });
+  return !!nameMatch;
+}
+
 interface RunContext {
   organizationId: string;
   campaignId: string;
   salesAgent: AIAgentInstance;
   stage: PipelineStage;
   ownerUserId: string;
+  /** Every real KVL-owned org id (including this one) — passed through to isAlreadyTargetedByOtherKvlOrg in processQuery. */
+  allKvlOrganizationIds: string[];
 }
 
-/** Shared setup every entry point below needs — resolves KVL's org/sales agent/pipeline stage/campaign once, or explains exactly why it can't (never a silent partial run). */
-async function resolveRunContext(): Promise<{ context: RunContext } | { skipLog: JobRunLog }> {
-  if (!isAIConnected()) return { skipLog: { level: "warn", message: "Skipped — no AI provider configured." } };
-
-  const organizationId = await resolveKvlOrganizationId();
-  if (!organizationId) return { skipLog: { level: "warn", message: `Skipped — no active OWNER membership found for ${KVL_OWNER_EMAIL}.` } };
-
+/** Per-org setup every entry point below needs — resolves this org's sales agent/pipeline stage/campaign, or explains exactly why it can't (never a silent partial run). */
+async function resolveRunContextForOrg(organizationId: string, allKvlOrganizationIds: string[]): Promise<{ context: RunContext } | { skipLog: JobRunLog }> {
   const salesAgent = await prisma.aIAgentInstance.findFirst({ where: { organizationId, type: "SALES", active: true } });
   if (!salesAgent) return { skipLog: { level: "warn", message: "Skipped — no active Sales agent for KVL's organization.", organizationId } };
 
@@ -295,7 +363,26 @@ async function resolveRunContext(): Promise<{ context: RunContext } | { skipLog:
 
   const campaignId = await ensureKvlOutreachCampaign(organizationId, owner.userId);
 
-  return { context: { organizationId, campaignId, salesAgent, stage, ownerUserId: owner.userId } };
+  return { context: { organizationId, campaignId, salesAgent, stage, ownerUserId: owner.userId, allKvlOrganizationIds } };
+}
+
+/** Resolves every real KVL-owned org into a run-ready RunContext, or an explanatory skip log for any that couldn't resolve — used by every multi-org job handler below. */
+async function resolveAllKvlRunContexts(): Promise<{ contexts: RunContext[]; skipLogs: JobRunLog[] }> {
+  if (!isAIConnected()) return { contexts: [], skipLogs: [{ level: "warn", message: "Skipped — no AI provider configured." }] };
+
+  const organizationIds = await resolveKvlOrganizationIds();
+  if (organizationIds.length === 0) {
+    return { contexts: [], skipLogs: [{ level: "warn", message: `Skipped — no active OWNER membership found for any of: ${KVL_OWNER_EMAILS.join(", ")}.` }] };
+  }
+
+  const contexts: RunContext[] = [];
+  const skipLogs: JobRunLog[] = [];
+  for (const organizationId of organizationIds) {
+    const resolved = await resolveRunContextForOrg(organizationId, organizationIds);
+    if ("skipLog" in resolved) skipLogs.push(resolved.skipLog);
+    else contexts.push(resolved.context);
+  }
+  return { contexts, skipLogs };
 }
 
 /** Runs one (sector, country, query) search, creates/dedups the Company+Lead, and auto-sends outreach for anything genuinely new. Shared by the per-country jobs and the daily catch-up. */
@@ -312,7 +399,26 @@ async function processQuery(ctx: RunContext, sectorLabel: string, country: strin
       resultKind: "lead",
     });
 
+    // Real diagnostic, not a fabricated success: distinguishes "genuinely 0
+    // real companies matched this query" from "no real-search-capable AI
+    // provider was reachable this run, so this result isn't grounded in
+    // real current search results" — the two look identical downstream
+    // (both end up as "0 new lead(s) found") unless logged separately here.
+    if (!search.usedRealWebSearch) {
+      logs.push({
+        level: "warn",
+        message: `Sector "${sectorLabel}" country "${country}": no real-search-capable AI provider was reachable — this query's ${search.companies.length} result(s) are not grounded in a real live search, and none were used.`,
+        organizationId: ctx.organizationId,
+      });
+      return { found, duplicatesSkipped };
+    }
+
     for (const item of search.companies) {
+      if (await isAlreadyTargetedByOtherKvlOrg(ctx.organizationId, ctx.allKvlOrganizationIds, { website: item.website, name: item.name })) {
+        duplicatesSkipped += 1;
+        continue;
+      }
+
       const { company, wasCreated } = await findOrCreateCompany({
         organizationId: ctx.organizationId,
         name: item.name,
@@ -322,6 +428,13 @@ async function processQuery(ctx: RunContext, sectorLabel: string, country: strin
         notes: item.reason,
         source: "AUTO_DISCOVERY",
         status: "LEAD",
+        // Real fix: this was never passed before, so every KVL-discovered
+        // Company (and, via autoOutreachToCompany's `company.headquartersCountry`
+        // read, every Contact) silently had no headquartersCountry/country at
+        // all — the daily report's "(unknown country)" label was the visible
+        // symptom, and per-country sent-today counting (see
+        // runKvlDailyCatchup) depends on this being real and populated.
+        headquartersCountry: country,
       });
 
       if (!wasCreated) {
@@ -381,93 +494,117 @@ export async function runKvlCountryOutreach(groupKey: string): Promise<JobRunLog
   const group = COUNTRY_GROUPS.find((g) => g.key === groupKey);
   if (!group) return [{ level: "error", message: `Unknown KVL country group "${groupKey}".` }];
 
-  const resolved = await resolveRunContext();
-  if ("skipLog" in resolved) return [resolved.skipLog];
-  const ctx = resolved.context;
+  const { contexts, skipLogs } = await resolveAllKvlRunContexts();
+  if (contexts.length === 0) return skipLogs;
 
-  const logs: JobRunLog[] = [];
-  const allFound: FoundCompany[] = [];
-  let duplicatesSkipped = 0;
+  const logs: JobRunLog[] = [...skipLogs];
 
-  for (const sector of SECTOR_TARGETS) {
-    for (const { country, query } of sector.countries) {
-      if (!group.countryNames.includes(country)) continue;
-      const result = await processQuery(ctx, sector.label, country, query, logs);
-      allFound.push(...result.found);
-      duplicatesSkipped += result.duplicatesSkipped;
+  for (const ctx of contexts) {
+    const allFound: FoundCompany[] = [];
+    let duplicatesSkipped = 0;
+
+    for (const sector of SECTOR_TARGETS) {
+      for (const { country, query } of sector.countries) {
+        if (!group.countryNames.includes(country)) continue;
+        const result = await processQuery(ctx, sector.label, country, query, logs);
+        allFound.push(...result.found);
+        duplicatesSkipped += result.duplicatesSkipped;
+      }
     }
+
+    const { totalSent, totalFailed } = summarize(allFound, logs, ctx.organizationId, `KVL ${group.label} outreach`);
+
+    await logActivity({
+      organizationId: ctx.organizationId,
+      type: "SYSTEM_EVENT",
+      description: `KVL ${group.label} business-hours outreach: ${allFound.length} new lead(s), ${totalSent} email(s) sent.`,
+      actorUserId: ctx.ownerUserId,
+      metadata: { group: group.key, totalFound: allFound.length, totalSent, totalFailed, duplicatesSkipped },
+    });
+    await logAudit({
+      organizationId: ctx.organizationId,
+      action: "business_development.kvl_country_outreach_run",
+      metadata: { group: group.key, totalFound: allFound.length, totalSent, totalFailed, duplicatesSkipped },
+    });
   }
-
-  const { totalSent, totalFailed } = summarize(allFound, logs, ctx.organizationId, `KVL ${group.label} outreach`);
-
-  await logActivity({
-    organizationId: ctx.organizationId,
-    type: "SYSTEM_EVENT",
-    description: `KVL ${group.label} business-hours outreach: ${allFound.length} new lead(s), ${totalSent} email(s) sent.`,
-    actorUserId: ctx.ownerUserId,
-    metadata: { group: group.key, totalFound: allFound.length, totalSent, totalFailed, duplicatesSkipped },
-  });
-  await logAudit({
-    organizationId: ctx.organizationId,
-    action: "business_development.kvl_country_outreach_run",
-    metadata: { group: group.key, totalFound: allFound.length, totalSent, totalFailed },
-  });
 
   return logs;
 }
 
 /**
  * 8pm IST safety net (registry.ts's `kvl-daily-catchup`) — the org wants a
- * genuine floor of DAILY_MIN real outreach emails/day. If today's 6
- * business-hours country runs already cleared that floor, this is a no-op.
- * If they came in short (thin search results, a provider outage during one
- * country's window, etc.), this re-runs the full query list — safe to
- * re-run because findOrCreateCompany/autoOutreachToCompany's existing
- * dedup means it only ever reaches genuinely new companies/contacts, never
- * re-emails anyone — stopping the moment the floor is reached rather than
- * always burning the full 28-query list. Never invents a lead to hit the
- * number: if real search results run out first, it reports honestly short.
+ * genuine floor of DAILY_MIN_PER_COUNTRY real outreach emails/day, PER
+ * COUNTRY GROUP (owner request, 2026-09-22 — previously a single global
+ * floor across all 6 countries combined). Each of the 6 COUNTRY_GROUPS is
+ * checked and topped up independently: if e.g. India already cleared 20
+ * today from its own business-hours run but USA only reached 3, this tops
+ * up ONLY USA's queries, not India's. Safe to re-run because
+ * findOrCreateCompany/autoOutreachToCompany's existing dedup means it only
+ * ever reaches genuinely new companies/contacts, never re-emails anyone.
+ * Never invents a lead to hit the number: if a country's real search
+ * results run out first, it reports honestly short for that country.
  */
 export async function runKvlDailyCatchup(): Promise<JobRunLog[]> {
-  const resolved = await resolveRunContext();
-  if ("skipLog" in resolved) return [resolved.skipLog];
-  const ctx = resolved.context;
+  const { contexts, skipLogs } = await resolveAllKvlRunContexts();
+  if (contexts.length === 0) return skipLogs;
 
-  const sentToday = await prisma.emailDraft.count({
-    where: { organizationId: ctx.organizationId, campaignId: ctx.campaignId, status: "SENT", sentAt: { gte: startOfTodayIST() } },
-  });
+  const logs: JobRunLog[] = [...skipLogs];
 
-  if (sentToday >= DAILY_MIN) {
-    return [{ level: "info", message: `Catch-up skipped — already sent ${sentToday}/${DAILY_MIN} today from the business-hours runs.`, organizationId: ctx.organizationId }];
-  }
+  for (const ctx of contexts) {
+    for (const group of COUNTRY_GROUPS) {
+      const sentTodayForCountry = await prisma.emailDraft.count({
+        where: {
+          organizationId: ctx.organizationId,
+          campaignId: ctx.campaignId,
+          status: "SENT",
+          sentAt: { gte: startOfTodayIST() },
+          contact: { country: { in: group.countryNames } },
+        },
+      });
 
-  const logs: JobRunLog[] = [{ level: "info", message: `Catch-up starting — only ${sentToday}/${DAILY_MIN} sent today, topping up.`, organizationId: ctx.organizationId }];
-  const allFound: FoundCompany[] = [];
-  let runningTotal = sentToday;
+      if (sentTodayForCountry >= DAILY_MIN_PER_COUNTRY) {
+        logs.push({
+          level: "info",
+          message: `${group.label} catch-up skipped — already sent ${sentTodayForCountry}/${DAILY_MIN_PER_COUNTRY} today from the business-hours run.`,
+          organizationId: ctx.organizationId,
+        });
+        continue;
+      }
 
-  outer: for (const sector of SECTOR_TARGETS) {
-    for (const { country, query } of sector.countries) {
-      if (runningTotal >= DAILY_MIN) break outer;
-      const result = await processQuery(ctx, sector.label, country, query, logs);
-      allFound.push(...result.found);
-      runningTotal += result.found.filter((f) => f.outreach === "sent").length;
+      logs.push({
+        level: "info",
+        message: `${group.label} catch-up starting — only ${sentTodayForCountry}/${DAILY_MIN_PER_COUNTRY} sent today, topping up.`,
+        organizationId: ctx.organizationId,
+      });
+      const allFound: FoundCompany[] = [];
+      let runningTotal = sentTodayForCountry;
+
+      for (const sector of SECTOR_TARGETS) {
+        for (const { country, query } of sector.countries) {
+          if (!group.countryNames.includes(country)) continue;
+          if (runningTotal >= DAILY_MIN_PER_COUNTRY) break;
+          const result = await processQuery(ctx, sector.label, country, query, logs);
+          allFound.push(...result.found);
+          runningTotal += result.found.filter((f) => f.outreach === "sent").length;
+        }
+      }
+
+      const { totalSent, totalFailed } = summarize(allFound, logs, ctx.organizationId, `KVL ${group.label} daily catch-up`);
+      logs.push({
+        level: runningTotal >= DAILY_MIN_PER_COUNTRY ? "info" : "warn",
+        message: `${group.label} catch-up finished — ${runningTotal}/${DAILY_MIN_PER_COUNTRY} sent today${runningTotal < DAILY_MIN_PER_COUNTRY ? " (fell short — real search results ran out, nothing fabricated)" : ""}.`,
+        organizationId: ctx.organizationId,
+      });
+
+      await logActivity({
+        organizationId: ctx.organizationId,
+        type: "SYSTEM_EVENT",
+        description: `KVL ${group.label} daily catch-up: topped up from ${sentTodayForCountry} to ${runningTotal}/${DAILY_MIN_PER_COUNTRY} sent today.`,
+        actorUserId: ctx.ownerUserId,
+        metadata: { group: group.key, sentBefore: sentTodayForCountry, sentAfter: runningTotal, dailyMinPerCountry: DAILY_MIN_PER_COUNTRY, totalFound: allFound.length, totalSent, totalFailed },
+      });
     }
   }
-
-  const { totalSent, totalFailed } = summarize(allFound, logs, ctx.organizationId, "KVL daily catch-up");
-  logs.push({
-    level: runningTotal >= DAILY_MIN ? "info" : "warn",
-    message: `Catch-up finished — ${runningTotal}/${DAILY_MIN} sent today${runningTotal < DAILY_MIN ? " (fell short — real search results ran out, nothing fabricated)" : ""}.`,
-    organizationId: ctx.organizationId,
-  });
-
-  await logActivity({
-    organizationId: ctx.organizationId,
-    type: "SYSTEM_EVENT",
-    description: `KVL daily catch-up: topped up from ${sentToday} to ${runningTotal}/${DAILY_MIN} sent today.`,
-    actorUserId: ctx.ownerUserId,
-    metadata: { sentBefore: sentToday, sentAfter: runningTotal, dailyMin: DAILY_MIN, totalFound: allFound.length, totalSent, totalFailed },
-  });
 
   return logs;
 }
@@ -485,12 +622,28 @@ export async function runKvlDailyCatchup(): Promise<JobRunLog[]> {
  * with the owner — this job only ever reports, never negotiates or
  * advances a deal stage on its own.
  */
+/** 9pm IST entry point (registry.ts) — sends one real report per KVL-owned org to both real owner inboxes (DIGEST_RECIPIENTS), so both recipients see both orgs' separate real numbers, clearly labeled by owner email — never merged into one fabricated combined total. */
 export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
-  const organizationId = await resolveKvlOrganizationId();
-  if (!organizationId) return [{ level: "warn", message: `Skipped — no active OWNER membership found for ${KVL_OWNER_EMAIL}.` }];
+  const organizationIds = await resolveKvlOrganizationIds();
+  if (organizationIds.length === 0) return [{ level: "warn", message: `Skipped — no active OWNER membership found for any of: ${KVL_OWNER_EMAILS.join(", ")}.` }];
+
+  const logs: JobRunLog[] = [];
+  for (const organizationId of organizationIds) {
+    logs.push(...(await sendKvlDailyReportForOrg(organizationId)));
+  }
+  return logs;
+}
+
+async function sendKvlDailyReportForOrg(organizationId: string): Promise<JobRunLog[]> {
+  const ownerMembership = await prisma.membership.findFirst({
+    where: { organizationId, status: "ACTIVE", role: "OWNER" },
+    orderBy: { createdAt: "asc" },
+    select: { user: { select: { email: true } } },
+  });
+  const orgLabel = ownerMembership?.user.email ?? organizationId;
 
   const campaign = await prisma.campaign.findFirst({ where: { organizationId, name: KVL_OUTREACH_CAMPAIGN_NAME } });
-  if (!campaign) return [{ level: "warn", message: "Skipped — KVL Sector Outreach campaign doesn't exist yet (no run has happened).", organizationId }];
+  if (!campaign) return [{ level: "warn", message: `Skipped for ${orgLabel} — KVL Sector Outreach campaign doesn't exist yet (no run has happened).`, organizationId }];
 
   const todayStart = startOfTodayIST();
   const istNow = new Date(Date.now() + IST_OFFSET_MS);
@@ -540,7 +693,7 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
   const text = [
     `KVL daily outreach report — ${dateLabel}`,
     "",
-    `Emails sent today: ${totalSent}/${DAILY_MIN} target (${totalOpened} opened, ${totalClicked} clicked, ${failedDrafts.length} failed)`,
+    `Emails sent today: ${totalSent}/${DAILY_TARGET_TOTAL} target (${totalOpened} opened, ${totalClicked} clicked, ${failedDrafts.length} failed)`,
     "",
     drafts.length > 0 ? lines.join("\n") : "  (no outreach attempts today)",
     "",
@@ -554,7 +707,7 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
 
   const html = `
     <h2>KVL daily outreach report — ${dateLabel}</h2>
-    <p><strong>Emails sent today: ${totalSent}/${DAILY_MIN} target</strong> — ${totalOpened} opened, ${totalClicked} clicked, ${failedDrafts.length} failed.</p>
+    <p><strong>Emails sent today: ${totalSent}/${DAILY_TARGET_TOTAL} target</strong> — ${totalOpened} opened, ${totalClicked} clicked, ${failedDrafts.length} failed.</p>
     ${
       drafts.length > 0
         ? `<ul>${drafts
@@ -581,10 +734,10 @@ export async function sendKvlDailyReport(): Promise<JobRunLog[]> {
   `;
 
   for (const to of DIGEST_RECIPIENTS) {
-    await sendEmail({ to, subject: `KVL daily outreach report — ${totalSent}/${DAILY_MIN} sent, ${replies.length} replies (${dateLabel})`, text, html });
+    await sendEmail({ to, subject: `KVL daily outreach report — ${totalSent}/${DAILY_TARGET_TOTAL} sent, ${replies.length} replies (${dateLabel})`, text, html });
   }
 
-  return [{ level: "info", message: `Daily report sent to ${DIGEST_RECIPIENTS.join(", ")} — ${totalSent}/${DAILY_MIN} sent, ${replies.length} real replies today.`, organizationId }];
+  return [{ level: "info", message: `Daily report sent to ${DIGEST_RECIPIENTS.join(", ")} — ${totalSent}/${DAILY_TARGET_TOTAL} sent, ${replies.length} real replies today.`, organizationId }];
 }
 
 /** Deliberately duplicated (not imported) from kvl-reply-sync-job.ts — that file already imports FROM this one, so importing back would create a circular dependency for a one-line check. */
@@ -639,6 +792,6 @@ export async function getKvlOutreachSummary(organizationId: string): Promise<Kvl
     todayFailed: todayDrafts.filter((d) => d.status === "FAILED").length,
     allTimeSent,
     conversions,
-    dailyTarget: DAILY_MIN,
+    dailyTarget: DAILY_TARGET_TOTAL,
   };
 }

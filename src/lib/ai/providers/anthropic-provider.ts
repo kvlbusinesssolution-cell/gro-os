@@ -15,6 +15,7 @@ import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredRe
 export const anthropicProvider: AIProviderAdapter = {
   id: "ANTHROPIC",
   model: AGENT_MODEL,
+  supportsWebSearch: true,
 
   isConfigured(): boolean {
     return isAIConnected();

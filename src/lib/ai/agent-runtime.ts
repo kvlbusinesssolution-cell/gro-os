@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { AINotConnectedError, isAIConnected } from "@/lib/ai/client";
-import { generateStructured, generateText } from "@/lib/ai/fallback";
+import { generateStructured, generateText, providerSupportsWebSearch } from "@/lib/ai/fallback";
 import { decryptMemory, encryptMemory } from "@/lib/ai/encryption";
 import { getPersona, type ExecutiveAgentType } from "@/lib/ai/personas";
 import { logMemoryEvent } from "@/lib/ai/memory-events";
@@ -917,6 +917,8 @@ export async function runWebSearchDiscovery(params: {
   companies: DiscoveredCompany[];
   researchSummary: string;
   usage: { inputTokens: number; outputTokens: number };
+  /** False when every real-search-capable provider (see fallback.ts's providerSupportsWebSearch) was unavailable and this request fell all the way through to a provider that only answered from training knowledge — `companies` may then be thin or empty for reasons that have nothing to do with real current search results. Callers (e.g. kvl-sector-discovery-job.ts) use this to log a diagnosable reason instead of an ambiguous "0 found". */
+  usedRealWebSearch: boolean;
 }> {
   if (!isAIConnected()) throw new AINotConnectedError();
 
@@ -977,6 +979,7 @@ export async function runWebSearchDiscovery(params: {
         inputTokens: searchResult.inputTokens + extraction.inputTokens,
         outputTokens: searchResult.outputTokens + extraction.outputTokens,
       },
+      usedRealWebSearch: providerSupportsWebSearch(searchResult.provider),
     };
   } catch (error) {
     await setAgentStatus(params.agentId, "IDLE");
