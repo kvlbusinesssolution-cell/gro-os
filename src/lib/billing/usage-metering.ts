@@ -137,13 +137,45 @@ const PLAN_LIMIT_FIELD: Partial<Record<UsageMetricType, "userLimit" | "workspace
 
 const STATE_METRICS = new Set<UsageMetricType>(["USERS", "WORKSPACES", "PROJECTS", "CRM_RECORDS", "KNOWLEDGE_BASE_MB"]);
 
-/** Real plan-limit enforcement check — call before an action that consumes a limited resource (inviting a member, creating a workspace, etc). A metric with no PLAN_LIMIT_FIELD mapping (BANDWIDTH_MB currently) always returns allowed:true — tracked for visibility, not yet plan-gated. */
+/**
+ * Real plan-limit enforcement check — call before an action that consumes a
+ * limited resource (inviting a member, creating a workspace, etc). A metric
+ * with no PLAN_LIMIT_FIELD mapping (BANDWIDTH_MB currently) always returns
+ * allowed:true — tracked for visibility, not yet plan-gated.
+ *
+ * Two real gates, checked in order:
+ *   1. Organization.isOwnerOrg (KVL Business Solutions' own tenant, the
+ *      only org exempt from every plan) short-circuits to unlimited before
+ *      touching BillingAccount/Plan at all.
+ *   2. Every other org resolves its limit from `billingAccount.currentPlan`
+ *      — but if that org has no BillingAccount yet (a pre-existing org
+ *      that predates onboarding assigning one, or any other edge case),
+ *      this falls back to the real FREE tier's limit for this metric
+ *      rather than treating "no billing row" as unlimited. Only a
+ *      genuinely CUSTOM/ENTERPRISE plan (whose own limit field is null)
+ *      is actually unlimited.
+ */
 export async function checkPlanLimit(organizationId: string, metricType: UsageMetricType): Promise<PlanLimitCheck> {
   const limitField = PLAN_LIMIT_FIELD[metricType];
   if (!limitField) return { allowed: true, limit: null, current: 0 };
 
+  const organization = await prisma.organization.findUnique({ where: { id: organizationId }, select: { isOwnerOrg: true, currency: true } });
+  if (organization?.isOwnerOrg) {
+    const current = STATE_METRICS.has(metricType)
+      ? await getCurrentStateUsage(organizationId, metricType as never)
+      : await getCurrentPeriodUsage(organizationId, metricType);
+    return { allowed: true, limit: null, current };
+  }
+
   const billingAccount = await prisma.billingAccount.findUnique({ where: { organizationId }, include: { currentPlan: true } });
-  const limit = billingAccount?.currentPlan?.[limitField] ?? null;
+  let limit: number | null;
+  if (billingAccount?.currentPlan) {
+    limit = billingAccount.currentPlan[limitField];
+  } else {
+    const { getDefaultFreePlan } = await import("./plan-catalog");
+    const freePlan = await getDefaultFreePlan(organization?.currency ?? "USD");
+    limit = freePlan?.[limitField] ?? null;
+  }
 
   const current = STATE_METRICS.has(metricType)
     ? await getCurrentStateUsage(organizationId, metricType as never)

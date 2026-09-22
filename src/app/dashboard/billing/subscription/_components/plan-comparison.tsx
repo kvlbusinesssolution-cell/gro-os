@@ -7,10 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
-import { changePlanAction } from "../actions";
+import { changePlanAction, startCheckoutAction } from "../actions";
+import type { PaymentGatewayProvider } from "@/generated/prisma/client";
 
 export interface PlanRowData {
   id: string;
+  tier: string;
+  interval: string;
   name: string;
   description: string | null;
   priceCents: number;
@@ -37,17 +40,31 @@ function formatLimit(value: number | null, unit = ""): string {
   return value === null ? "Unlimited" : `${value.toLocaleString()}${unit}`;
 }
 
+function formatPrice(cents: number, currency: string): string {
+  if (cents === 0) return "Free";
+  try {
+    return (cents / 100).toLocaleString(undefined, { style: "currency", currency, maximumFractionDigits: 0 });
+  } catch {
+    return `${(cents / 100).toLocaleString()} ${currency}`;
+  }
+}
+
+/** Simple default gateway per currency until an operator configures more than one — Razorpay reads better for INR/Gulf tenants, Stripe covers everything else. Either can be reconfigured per plan via `Plan.gatewayPriceIds` once real gateway credentials exist. */
+function defaultGatewayFor(currency: string): PaymentGatewayProvider {
+  return currency === "INR" || currency === "AED" || currency === "SAR" ? "RAZORPAY" : "STRIPE";
+}
+
 /**
- * KVL Business Solutions runs a single free plan (see plan-catalog.ts) — no
- * tiers to compare, no checkout, no gateway. This just confirms Full Access
- * and, if the org hasn't been switched onto it yet, activates it in one
- * click via changePlanAction (which sets currentPlanId directly with no
- * payment involved whenever there's no live gateway subscription).
+ * Real multi-tier plan comparison — FREE through ENTERPRISE, priced in the
+ * org's own currency (CUSTOM is deliberately excluded: it's a manually
+ * negotiated, never-self-service tier per plan-catalog.ts). Monthly rows
+ * only are shown side by side here; a yearly toggle isn't built yet, so
+ * each card's own price reflects whichever interval was passed in.
  */
 export function PlanComparison({ plans, currentPlanId, canManage }: PlanComparisonProps) {
-  const plan = plans[0];
+  const monthlyPlans = plans.filter((p) => p.interval === "MONTHLY" && p.tier !== "CUSTOM");
 
-  if (!plan) {
+  if (monthlyPlans.length === 0) {
     return (
       <Card glass>
         <CardHeader>
@@ -61,12 +78,14 @@ export function PlanComparison({ plans, currentPlanId, canManage }: PlanComparis
   return (
     <div className="flex flex-col gap-4">
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-foreground">Plan</h2>
-        <p className="text-sm text-muted-foreground">KVL Business Solutions has no subscriptions or paid tiers — this is the only plan, and it&rsquo;s free.</p>
+        <h2 className="text-lg font-semibold tracking-tight text-foreground">Plans</h2>
+        <p className="text-sm text-muted-foreground">Pick the tier that matches your team&rsquo;s size and usage — upgrade or downgrade any time.</p>
       </div>
 
-      <div className="mx-auto w-full max-w-md">
-        <PlanCard plan={plan} isCurrent={plan.id === currentPlanId} canManage={canManage} />
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        {monthlyPlans.map((plan) => (
+          <PlanCard key={plan.id} plan={plan} isCurrent={plan.id === currentPlanId} canManage={canManage} />
+        ))}
       </div>
     </div>
   );
@@ -74,29 +93,47 @@ export function PlanComparison({ plans, currentPlanId, canManage }: PlanComparis
 
 function PlanCard({ plan, isCurrent, canManage }: { plan: PlanRowData; isCurrent: boolean; canManage: boolean }) {
   const [pending, startTransition] = useTransition();
+  const isFree = plan.priceCents === 0;
 
-  function handleActivate() {
+  function handleActivateFree() {
     startTransition(async () => {
       const result = await changePlanAction(plan.id);
       if (!result.ok) {
-        toast.error(result.error ?? "Could not activate Full Access.");
+        toast.error(result.error ?? "Could not activate this plan.");
         return;
       }
-      toast.success("Full Access activated — free, no card needed.");
+      toast.success(`${plan.name} activated.`);
+    });
+  }
+
+  function handleSubscribe() {
+    startTransition(async () => {
+      const provider = defaultGatewayFor(plan.currency);
+      const result = await startCheckoutAction(plan.id, provider);
+      if (!result.ok) {
+        toast.error(result.error ?? "Could not start checkout.");
+        return;
+      }
+      if (result.checkoutUrl) {
+        window.location.href = result.checkoutUrl;
+      }
     });
   }
 
   return (
-    <Card glass className="border-primary/40 shadow-elevated shadow-glow-primary">
+    <Card glass className={isCurrent ? "border-primary/40 shadow-elevated shadow-glow-primary" : undefined}>
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-base">{plan.name}</CardTitle>
-          <Badge variant="accent">Free</Badge>
+          {isFree && <Badge variant="accent">Free</Badge>}
         </div>
-        <CardDescription>{plan.description ?? " "}</CardDescription>
+        <CardDescription className="line-clamp-2">{plan.description ?? " "}</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <p className="text-3xl font-semibold tracking-tight text-foreground">Free</p>
+        <div className="flex items-baseline gap-1">
+          <p className="text-2xl font-semibold tracking-tight text-foreground">{formatPrice(plan.priceCents, plan.currency)}</p>
+          {!isFree && <span className="text-xs text-muted-foreground">/mo</span>}
+        </div>
 
         <ul className="flex flex-col gap-1.5 text-sm text-muted-foreground">
           <li className="flex items-center gap-1.5">
@@ -141,14 +178,18 @@ function PlanCard({ plan, isCurrent, canManage }: { plan: PlanRowData; isCurrent
 
         <div className="mt-auto pt-2">
           {!canManage ? (
-            <p className="text-xs text-muted-foreground">Only owners and admins can activate the plan.</p>
+            <p className="text-xs text-muted-foreground">Only owners and admins can change plans.</p>
           ) : isCurrent ? (
             <Badge variant="accent" className="w-fit">
               Current plan
             </Badge>
+          ) : isFree ? (
+            <Button type="button" size="sm" variant="outline" disabled={pending} onClick={handleActivateFree}>
+              {pending ? "Switching…" : "Downgrade to Free"}
+            </Button>
           ) : (
-            <Button type="button" size="sm" disabled={pending} onClick={handleActivate}>
-              {pending ? "Activating..." : "Activate — it's free"}
+            <Button type="button" size="sm" disabled={pending} onClick={handleSubscribe}>
+              {pending ? "Starting checkout…" : `Subscribe to ${plan.name}`}
             </Button>
           )}
         </div>

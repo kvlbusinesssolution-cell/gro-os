@@ -33,6 +33,56 @@ function toRow(cells: Array<string | number | null | undefined>): string {
   return cells.map(escapeCsvCell).join(",");
 }
 
+export interface ExportPriorityQueueRow {
+  companyName: string;
+  industry: string | null;
+  country: string | null;
+  opportunityTitle: string;
+  leadScore: number | null;
+  intentScore: number | null;
+  opportunityScore: number | null;
+  priority: string | null;
+  status: string;
+  ownerName: string | null;
+  nextAction: string;
+  createdAt: Date;
+}
+
+/** Priority Queue export — exactly the rows/filters currently on screen (see /api/export/priority-queue). */
+export function priorityQueueToCsv(rows: ExportPriorityQueueRow[]): string {
+  const header = [
+    "Company",
+    "Industry",
+    "Country",
+    "Opportunity",
+    "Lead Score",
+    "Intent Score",
+    "Opportunity Score",
+    "Priority",
+    "Status",
+    "Owner",
+    "Recommended Next Action",
+    "Created At",
+  ];
+  const csvRows = rows.map((r) =>
+    toRow([
+      r.companyName,
+      r.industry,
+      r.country,
+      r.opportunityTitle,
+      r.leadScore,
+      r.intentScore,
+      r.opportunityScore,
+      r.priority,
+      r.status,
+      r.ownerName,
+      r.nextAction,
+      r.createdAt.toISOString(),
+    ]),
+  );
+  return [toRow(header), ...csvRows].join("\r\n");
+}
+
 /** Full-field export — every real stored profile field, one row per company. */
 export function companiesToCsv(companies: ExportCompanyRow[]): string {
   const header = [

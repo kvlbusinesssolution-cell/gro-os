@@ -2,6 +2,8 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { getRevenueForecast, getCashFlowProjection } from "@/lib/revenue/forecast";
+import { computePredictedPipeline } from "@/lib/forecast/pipeline";
+import { computeMonthlyForecast } from "@/lib/forecast/revenue-forecast";
 import { computeAcquisitionOverview } from "@/lib/analytics/acquisition-funnel";
 import { generateStructured } from "@/lib/ai/fallback";
 import { recordAIUsage } from "@/lib/billing/ai-credits";
@@ -199,6 +201,8 @@ export async function generateDailyBrief(organizationId: string): Promise<Execut
     pendingApprovalsCount,
     revenueForecastDay,
     cashFlow,
+    predictedPipeline,
+    monthlyForecast,
     topAlerts,
     recommendedInsights,
     growthSignals,
@@ -220,6 +224,8 @@ export async function generateDailyBrief(organizationId: string): Promise<Execut
     prisma.approval.count({ where: { organizationId, decision: "PENDING" } }),
     getRevenueForecast(organizationId, "day"),
     getCashFlowProjection(organizationId, 4),
+    computePredictedPipeline(organizationId),
+    computeMonthlyForecast(organizationId, 0),
     prisma.alert.findMany({ where: { organizationId, status: "ACTIVE" }, orderBy: [{ severity: "desc" }, { triggeredAt: "desc" }], take: 5 }),
     prisma.insight.findMany({ where: { organizationId }, orderBy: { createdAt: "desc" }, take: 5 }),
     computeGrowthSignals(organizationId),
@@ -243,6 +249,7 @@ export async function generateDailyBrief(organizationId: string): Promise<Execut
         `Real new leads (last ${NEW_LEADS_WINDOW_DAYS} day): ${newLeadsCount}.`,
         `Real revenue forecast (today): ${revenueForecastDay.total.toFixed(2)}, confidence ${revenueForecastDay.confidenceScore}/100.`,
         `Real expected cash inflow (next 4 weeks): ${cashFlowNext4Weeks.toFixed(2)}.`,
+        `Phase 12 predictive revenue engine — current forecast for ${monthlyForecast.periodLabel} is ${monthlyForecast.forecastTotal.toFixed(2)} with ${monthlyForecast.confidence} model confidence (actual so far: ${monthlyForecast.actualRevenue.toFixed(2)}, expected future: ${monthlyForecast.expectedFutureRevenue.toFixed(2)}). Predicted weighted pipeline: ${predictedPipeline.weightedPipelineValue.toFixed(2)} of ${predictedPipeline.openPipelineValue.toFixed(2)} real open pipeline. IMPORTANT: write about this forecast using hedged language ("current forecast is X with Y% confidence") — NEVER state it as a guaranteed future fact ("revenue will be X").`,
         `Real pending approvals: ${pendingApprovalsCount}.`,
         opportunities.length > 0 ? `Real top opportunities:\n${opportunities.map((o) => `- ${o.title}${o.value != null ? ` (${o.value.toFixed(2)})` : ""}`).join("\n")}` : "No real opportunities on record.",
         risks.length > 0 ? `Real active risks:\n${risks.join("\n")}` : "No active risk alerts.",
@@ -251,7 +258,7 @@ export async function generateDailyBrief(organizationId: string): Promise<Execut
       ].join("\n\n");
 
       const result = await generateStructured({
-        system: `${persona.systemPrompt}\n\nYou are writing the AI CEO Daily Brief — a short executive-voice paragraph. Ground every sentence strictly in the real data given below — never invent a number, deal, or event not present in it. If a section has no real data, say so honestly.`,
+        system: `${persona.systemPrompt}\n\nYou are writing the AI CEO Daily Brief — a short executive-voice paragraph. Ground every sentence strictly in the real data given below — never invent a number, deal, or event not present in it. If a section has no real data, say so honestly. Any revenue forecast is a PREDICTION, not a fact — always phrase it as "current forecast is X with Y% confidence," never "revenue will be X."`,
         userContent: `Today's real business state:\n\n${dataSummary}\n\nWrite one short CEO-voice paragraph summarizing today's priorities.`,
         maxTokens: 1024,
         effort: "low",
@@ -271,7 +278,7 @@ export async function generateDailyBrief(organizationId: string): Promise<Execut
       newLeadsCount,
       opportunities: opportunities as unknown as Prisma.InputJsonValue,
       pendingApprovalsCount,
-      revenueForecast: { day: revenueForecastDay, cashFlowNext4Weeks } as unknown as Prisma.InputJsonValue,
+      revenueForecast: { day: revenueForecastDay, cashFlowNext4Weeks, predictedWeightedPipeline: predictedPipeline.weightedPipelineValue, monthlyForecast } as unknown as Prisma.InputJsonValue,
       risks,
       recommendedActions,
       growthSignals: growthSignals as unknown as Prisma.InputJsonValue,

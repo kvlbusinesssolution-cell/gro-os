@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { notifyOrganizationOwners, notifyUser } from "@/lib/notifications";
 import { sendOutreachEmail } from "@/lib/outreach/email-provider";
 import { injectTracking, getAppBaseUrl } from "@/lib/outreach/tracking";
+import { sendWhatsAppMessage } from "@/lib/outreach/whatsapp-provider";
+import { getOrCreateWhatsAppConversation, markConversationOutbound } from "@/lib/outreach/whatsapp-conversation";
 import type { ApprovalDecision } from "@/generated/prisma/client";
 
 export interface ActionResult {
@@ -119,7 +121,7 @@ export async function queueDraft(draftId: string): Promise<ActionResult> {
 export async function sendQueuedDraftCore(organizationId: string, draftId: string, actingUserId: string | null): Promise<ActionResult> {
   const draft = await prisma.emailDraft.findUnique({ where: { id: draftId }, include: { contact: true } });
   if (!draft || draft.organizationId !== organizationId) return { ok: false, error: "Draft not found." };
-  if (draft.channel !== "EMAIL") return { ok: false, error: "Only email drafts can be sent this way — LinkedIn drafts are marked sent manually." };
+  if (draft.channel === "LINKEDIN") return { ok: false, error: "Only email/WhatsApp drafts can be sent this way — LinkedIn drafts are marked sent manually." };
   if (draft.status !== "QUEUED") return { ok: false, error: "Only a queued draft can be sent." };
 
   if (draft.contact.status === "UNSUBSCRIBED") {
@@ -127,6 +129,10 @@ export async function sendQueuedDraftCore(organizationId: string, draftId: strin
     await prisma.emailDraft.update({ where: { id: draftId }, data: { status: "FAILED", failedReason } });
     revalidatePath("/dashboard/outreach");
     return { ok: false, error: failedReason };
+  }
+
+  if (draft.channel === "WHATSAPP") {
+    return sendQueuedWhatsAppDraftCore(organizationId, draft, actingUserId);
   }
 
   const baseUrl = getAppBaseUrl();
@@ -169,6 +175,59 @@ export async function sendQueuedDraftCore(organizationId: string, draftId: strin
       message: `Sent "${draft.subject ?? "email"}" to ${draft.contact.firstName} at its scheduled time.`,
     });
   }
+
+  revalidatePath("/dashboard/outreach");
+  return { ok: true };
+}
+
+/**
+ * Phase 8 (WhatsApp Business Outreach) — the WHATSAPP-channel counterpart
+ * to the EMAIL block above, called from sendQueuedDraftCore so both
+ * channels share the exact same approval/queue entry point (§19: AI must
+ * never silently send — a WhatsApp draft only ever gets here after a real
+ * human APPROVE + QUEUE, or the scheduled-send job's own re-check).
+ */
+async function sendQueuedWhatsAppDraftCore(
+  organizationId: string,
+  draft: NonNullable<Awaited<ReturnType<typeof prisma.emailDraft.findUnique>>> & { contact: { firstName: string; phone: string | null } },
+  actingUserId: string | null,
+): Promise<ActionResult> {
+  if (!draft.contact.phone) {
+    const failedReason = "Contact has no phone number — cannot send WhatsApp message.";
+    await prisma.emailDraft.update({ where: { id: draft.id }, data: { status: "FAILED", failedReason } });
+    revalidatePath("/dashboard/outreach");
+    return { ok: false, error: failedReason };
+  }
+
+  const baseUrl = getAppBaseUrl();
+  const result = await sendWhatsAppMessage({
+    organizationId,
+    to: draft.contact.phone,
+    body: draft.body,
+    templateContentSid: draft.whatsappTemplateId ?? undefined,
+    statusCallbackUrl: `${baseUrl}/api/webhooks/twilio-whatsapp/${organizationId}`,
+  });
+
+  if (!result.ok) {
+    await prisma.emailDraft.update({ where: { id: draft.id }, data: { status: "FAILED", failedReason: result.error } });
+    revalidatePath("/dashboard/outreach");
+    return { ok: false, errorKind: result.errorKind === "not_configured" ? "not_configured" : "generic", error: result.error };
+  }
+
+  const conversation = await getOrCreateWhatsAppConversation(organizationId, draft.contactId);
+  await prisma.emailDraft.update({
+    where: { id: draft.id },
+    data: { status: "SENT", sentAt: new Date(), providerMessageId: result.providerMessageId, whatsappConversationId: conversation.id },
+  });
+  await markConversationOutbound(conversation.id);
+
+  if (actingUserId) {
+    await notifyUser({ userId: actingUserId, organizationId, type: "CRM_EVENT", title: "WhatsApp message sent", message: `Sent a WhatsApp message to ${draft.contact.firstName}.` });
+  } else {
+    await notifyOrganizationOwners({ organizationId, type: "CRM_EVENT", title: "Scheduled WhatsApp message sent", message: `Sent a WhatsApp message to ${draft.contact.firstName} at its scheduled time.` });
+  }
+
+  await logAudit({ userId: actingUserId, organizationId, action: "whatsapp.message_sent", metadata: { draftId: draft.id, contactId: draft.contactId, providerMessageId: result.providerMessageId } });
 
   revalidatePath("/dashboard/outreach");
   return { ok: true };

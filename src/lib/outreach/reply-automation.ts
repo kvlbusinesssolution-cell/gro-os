@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { addSuppressionEntry } from "./suppression";
 import type { MessagePriority, ReplyIntent } from "@/generated/prisma/client";
 
 export interface ReplyAutomationResult {
@@ -115,6 +116,9 @@ export async function applyReplyAutomation(replyId: string): Promise<ReplyAutoma
         // (logReplyCore) could leave a neutral-sentiment "please remove me"
         // reply as REPLIED instead of UNSUBSCRIBED. Force it here.
         await prisma.contact.update({ where: { id: contact.id }, data: { status: "UNSUBSCRIBED" } });
+        // Phase 4: real, immediate suppression (rule 10) — not just a
+        // Contact.status flag downstream code might forget to check.
+        await addSuppressionEntry({ organizationId, identifier: contact.email, reason: "UNSUBSCRIBED", source: `Reply ${reply.id} classified UNSUBSCRIBE` });
         actionsApplied.push("unsubscribed");
         break;
       }

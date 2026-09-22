@@ -9,6 +9,8 @@ export const pt: Dictionary = {
   "nav.opportunities": "Oportunidades de IA",
   "nav.priorityQueue": "Fila de Prioridades de IA",
   "nav.revenueCommandCenter": "Central de Comando de Receita",
+  "nav.learning": "Aprendizado de Receita",
+  "nav.forecast": "Receita Preditiva",
   "nav.clients": "Clientes",
   "nav.promptLibrary": "Biblioteca de Prompts",
   "nav.hr": "RH",

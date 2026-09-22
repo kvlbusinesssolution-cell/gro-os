@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Inbox, Megaphone, Users } from "lucide-react";
+import { Inbox, Megaphone, Users, ShieldCheck } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,6 +54,9 @@ export default async function OutreachPage() {
             </Link>
             <Link href="/dashboard/outreach/inbox" className="flex items-center gap-1.5 text-sm text-primary hover:underline">
               <Inbox className="size-4" /> Inbox
+            </Link>
+            <Link href="/dashboard/outreach/email-health" className="flex items-center gap-1.5 text-sm text-primary hover:underline">
+              <ShieldCheck className="size-4" /> Email Health
             </Link>
             <OutreachExportMenu />
             <CampaignForm />

@@ -52,6 +52,8 @@ const LINKS = [
   { href: "/dashboard/opportunities", labelKey: "nav.opportunities", icon: Target },
   { href: "/dashboard/priority-queue", labelKey: "nav.priorityQueue", icon: ListOrdered },
   { href: "/dashboard/revenue-command-center", labelKey: "nav.revenueCommandCenter", icon: Gauge },
+  { href: "/dashboard/learning", labelKey: "nav.learning", icon: BarChart3 },
+  { href: "/dashboard/forecast", labelKey: "nav.forecast", icon: TrendingUp },
   { href: "/dashboard/clients", labelKey: "nav.clients", icon: HeartPulse },
   { href: "/dashboard/lead-finder", labelKey: "nav.leadFinder", icon: UserSearch },
   { href: "/dashboard/client-finder", labelKey: "nav.clientFinder", icon: Handshake },

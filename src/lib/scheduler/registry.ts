@@ -6,6 +6,8 @@ import { ensureTodayGrowthScoreSnapshot } from "@/lib/growth/score";
 import { generateGrowthImprovementPlan } from "@/lib/growth/improvement-plan";
 import { ensureLatestChurnRiskAssessment } from "@/lib/clients/churn";
 import { runPredictionCalibrationForOrg } from "@/lib/ai/prediction-calibration";
+import { runLearningEngineJob } from "@/lib/learning/job";
+import { runForecastEngineJob } from "@/lib/forecast/job";
 import { generateClientOpportunities } from "@/lib/clients/opportunity-engine";
 import { refreshCompetitorSnapshot } from "@/lib/company-discovery/competitor-discovery";
 import { discoverMarketTrends } from "@/lib/market-intelligence/trend-discovery";
@@ -20,6 +22,7 @@ import { isAIConnected } from "@/lib/ai/client";
 import { notifyUser, notifyOrganizationOwners } from "@/lib/notifications";
 import { sendEmail } from "@/lib/email";
 import { evaluateAlerts } from "@/lib/alerts/engine";
+import { runEmailHealthCheck } from "@/lib/outreach/email-health-job";
 import { runAndRecordFullSystemCheck } from "@/lib/monitoring/aggregate";
 import { runLeadDiscoveryForAllOrganizations } from "@/lib/business-development/discovery-job";
 import { runKvlCountryOutreach, runKvlDailyCatchup, sendKvlDailyReport } from "@/lib/business-development/kvl-sector-discovery-job";
@@ -27,7 +30,9 @@ import { runKvlReplySync } from "@/lib/business-development/kvl-reply-sync-job";
 import { runCompanyResearchBacklog } from "@/lib/business-development/company-research-job";
 import { runWebsiteIntelligenceSync } from "@/lib/business-development/website-intelligence-sync-job";
 import { runDecisionMakerSync } from "@/lib/business-development/decision-maker-sync-job";
+import { runStaleCompanyReenrichment } from "@/lib/business-development/stale-reenrichment-job";
 import { runPartnerDiscoverySync } from "@/lib/business-development/partner-discovery-sync-job";
+import { runRevenueAttributionRecompute } from "@/lib/analytics/revenue-attribution-job";
 import { runScheduledEmailSend } from "@/lib/business-development/scheduled-send-job";
 import { runBackupScript } from "@/lib/ops/run-backup-script";
 import { runRestoreTest } from "@/lib/ops/restore-test";
@@ -889,6 +894,17 @@ async function smartAlertsEvaluationJob(): Promise<JobRunLog[]> {
 }
 
 /**
+ * Phase 4 (Email Deliverability & Sender Health Engine) — see
+ * email-health-job.ts's doc comment for why this exists as its own job
+ * (tighter cadence than the hourly Smart Alerts cycle for the safety-
+ * critical circuit breaker) rather than piggybacking entirely on
+ * smartAlertsEvaluationJob above.
+ */
+async function emailHealthCheckJob(): Promise<JobRunLog[]> {
+  return runEmailHealthCheck();
+}
+
+/**
  * Periodic infra health snapshot — runs the exact same real check/persist/
  * alert pipeline as the public GET /api/health route (src/lib/monitoring/
  * aggregate.ts's runAndRecordFullSystemCheck), so SystemHealthSnapshot rows
@@ -963,12 +979,20 @@ async function decisionMakerSyncJob(): Promise<JobRunLog[]> {
   return runDecisionMakerSync();
 }
 
+async function staleCompanyReenrichmentJob(): Promise<JobRunLog[]> {
+  return runStaleCompanyReenrichment();
+}
+
 async function partnerDiscoverySyncJob(): Promise<JobRunLog[]> {
   return runPartnerDiscoverySync();
 }
 
 async function scheduledEmailSendJob(): Promise<JobRunLog[]> {
   return runScheduledEmailSend();
+}
+
+async function revenueAttributionRecomputeJob(): Promise<JobRunLog[]> {
+  return runRevenueAttributionRecompute();
 }
 
 export const JOB_DEFINITIONS: JobDefinition[] = [
@@ -1091,6 +1115,14 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: smartAlertsEvaluationJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
     priority: 1, // hourly, user-facing alert engine — same top tier as overdue detection since staleness directly degrades the Alert Center
+  },
+  {
+    key: "email-health-check",
+    name: "Email sending health check (Phase 4)",
+    cronExpression: "*/15 * * * *",
+    handler: emailHealthCheckJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 30_000 },
+    priority: 1, // safety-critical circuit breaker — same top tier as Smart Alerts, checked more often (every 15 min) since a dangerous bounce/complaint spike shouldn't wait for the hourly alert cycle
   },
   {
     key: "health-snapshot",
@@ -1225,6 +1257,38 @@ export const JOB_DEFINITIONS: JobDefinition[] = [
     handler: decisionMakerSyncJob,
     retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
     priority: 4, // opt-in, bounded batch (5 qualified companies/org/run) — same tier as company-research-backlog/website-intelligence-sync, safe to retry since discoverDecisionMakers is idempotent
+  },
+  {
+    key: "revenue-attribution-recompute",
+    name: "Revenue attribution recompute (Phase 7 Revenue Attribution Engine)",
+    cronExpression: "0 4 * * *",
+    handler: revenueAttributionRecomputeJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // deterministic, no AI spend, but a full-org sweep — nightly is enough since paid invoices don't change every few minutes
+  },
+  {
+    key: "learning-engine-daily-run",
+    name: "Closed-loop revenue learning engine (Phase 11)",
+    cronExpression: "0 5 * * *",
+    handler: runLearningEngineJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // deterministic, no AI spend; runs after revenue-attribution-recompute (4am) and prediction-calibration-refresh (1:30am) so it reads their freshest output
+  },
+  {
+    key: "forecast-engine-daily-run",
+    name: "Predictive revenue engine (Phase 12)",
+    cronExpression: "30 5 * * *",
+    handler: runForecastEngineJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // deterministic, no AI spend; runs after revenue-attribution-recompute (4am) and learning-engine-daily-run (5am) so it reads their freshest output
+  },
+  {
+    key: "stale-company-reenrichment",
+    name: "Stale company re-enrichment (Phase 1 Data & Enrichment Engine)",
+    cronExpression: "0 3 * * *",
+    handler: staleCompanyReenrichmentJob,
+    retryPolicy: { maxAttempts: 2, backoffMs: 60_000 },
+    priority: 4, // opt-in, bounded batch (5 high-value + 5 normal companies/org/run) — daily (not 30-min like its siblings) since staleness is measured in days/weeks, not minutes; safe to retry, enrichCompany is idempotent
   },
   {
     key: "partner-discovery-sync",

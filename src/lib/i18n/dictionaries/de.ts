@@ -9,6 +9,8 @@ export const de: Dictionary = {
   "nav.opportunities": "KI-Chancen",
   "nav.priorityQueue": "KI-Prioritätswarteschlange",
   "nav.revenueCommandCenter": "Umsatz-Kommandozentrale",
+  "nav.learning": "Umsatz-Lernen",
+  "nav.forecast": "Prädiktiver Umsatz",
   "nav.clients": "Kunden",
   "nav.promptLibrary": "Prompt-Bibliothek",
   "nav.hr": "Personal",

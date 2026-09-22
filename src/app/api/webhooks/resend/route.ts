@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity";
+import { addSuppressionEntry } from "@/lib/outreach/suppression";
 
 // Resend outbound-email lifecycle webhook receiver. Resend signs webhook
 // deliveries via Svix (svix-id/svix-timestamp/svix-signature headers), with
@@ -58,29 +59,82 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, skipped: true });
     }
 
-    const draft = await prisma.emailDraft.findUnique({ where: { resendMessageId: emailId } });
+    const draft = await prisma.emailDraft.findUnique({ where: { resendMessageId: emailId }, include: { contact: { select: { email: true } } } });
     if (!draft) {
       console.warn(`[webhooks/resend] no EmailDraft for resendMessageId ${emailId} — ignoring.`);
       return NextResponse.json({ ok: true, skipped: true });
     }
+    const recipientEmail = draft.contact.email;
+
+    // Phase 4 (Email Deliverability & Sender Health Engine) — real
+    // idempotency: Svix's own delivery id is the provider's real event id.
+    // A unique constraint on EmailProviderEvent.providerEventId means a
+    // re-delivered webhook is a genuine no-op at the DB level (the create
+    // below throws P2002, caught and treated as "already processed" — never
+    // a second EmailDraft update, never a second suppression entry).
+    const providerEventId = request.headers.get("svix-id");
+    if (providerEventId) {
+      const alreadyProcessed = await prisma.emailProviderEvent.findUnique({ where: { providerEventId } });
+      if (alreadyProcessed) {
+        return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
+      }
+    }
 
     if (type === "email.bounced") {
       const bounceReason = extractBounceReason(payload);
+      // Best-effort hard/soft extraction — see EmailDraft.bounceType's doc
+      // comment: "unknown" (never a silently-assumed "soft") when the real
+      // payload doesn't clearly say, so suppression stays conservative.
+      const bounceType = extractBounceType(payload);
       await prisma.emailDraft.update({
         where: { id: draft.id },
-        data: { status: "BOUNCED", bouncedAt: new Date(), bounceReason },
+        data: { status: "BOUNCED", bouncedAt: new Date(), bounceReason, bounceType },
       });
+      if (providerEventId) {
+        await prisma.emailProviderEvent
+          .create({
+            data: {
+              organizationId: draft.organizationId,
+              emailDraftId: draft.id,
+              provider: "RESEND",
+              eventType: bounceType === "soft" ? "SOFT_BOUNCE" : "HARD_BOUNCE",
+              recipient: recipientEmail,
+              providerEventId,
+              metadata: payload as object,
+            },
+          })
+          .catch(() => {}); // race with another delivery of the same event — the unique constraint already protects correctness
+      }
+      if (bounceType !== "soft") {
+        await addSuppressionEntry({ organizationId: draft.organizationId, identifier: recipientEmail, reason: "HARD_BOUNCE", source: `Resend webhook ${emailId}` });
+      }
       await logActivity({
         organizationId: draft.organizationId,
         type: "SYSTEM_EVENT",
         description: `Email bounced (Resend message ${emailId}): ${bounceReason}`,
-        metadata: { emailDraftId: draft.id, provider: "RESEND", resendMessageId: emailId },
+        metadata: { emailDraftId: draft.id, provider: "RESEND", resendMessageId: emailId, bounceType },
       });
     } else {
       await prisma.emailDraft.update({
         where: { id: draft.id },
         data: { complainedAt: new Date() },
       });
+      if (providerEventId) {
+        await prisma.emailProviderEvent
+          .create({
+            data: {
+              organizationId: draft.organizationId,
+              emailDraftId: draft.id,
+              provider: "RESEND",
+              eventType: "COMPLAINT",
+              recipient: recipientEmail,
+              providerEventId,
+              metadata: payload as object,
+            },
+          })
+          .catch(() => {});
+      }
+      await addSuppressionEntry({ organizationId: draft.organizationId, identifier: recipientEmail, reason: "SPAM_COMPLAINT", source: `Resend webhook ${emailId}` });
       await logActivity({
         organizationId: draft.organizationId,
         type: "SYSTEM_EVENT",
@@ -94,6 +148,22 @@ export async function POST(request: Request) {
   }
 
   return NextResponse.json({ ok: true });
+}
+
+/** Best-effort — see EmailDraft.bounceType's doc comment. Checks the field paths a Resend bounce payload is documented to use; returns "unknown" (never a guessed "soft") if none match. */
+function extractBounceType(payload: unknown): string {
+  if (typeof payload !== "object" || payload === null) return "unknown";
+  const data = (payload as Record<string, unknown>).data;
+  if (typeof data !== "object" || data === null) return "unknown";
+  const bounce = (data as Record<string, unknown>).bounce;
+  const raw =
+    (typeof bounce === "object" && bounce !== null ? (bounce as Record<string, unknown>).type : undefined) ??
+    (data as Record<string, unknown>).bounce_type;
+  if (typeof raw !== "string") return "unknown";
+  const lower = raw.toLowerCase();
+  if (lower.includes("hard") || lower.includes("permanent")) return "hard";
+  if (lower.includes("soft") || lower.includes("transient")) return "soft";
+  return "unknown";
 }
 
 function extractType(payload: unknown): string | null {

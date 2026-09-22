@@ -13,6 +13,12 @@
  * - workflows:trigger — programmatically fire a Workflow run via the real
  *   startWorkflowRun/fireWorkflowTrigger engine (src/lib/workflows/engine.ts,
  *   src/lib/workflows/triggers.ts).
+ * - learning:read — GET /api/learning/* (Phase 11 Closed-Loop Revenue
+ *   Learning Engine — patterns, signals, validation, recommendations, all
+ *   read-only).
+ * - forecast:read — GET /api/forecast/* (Phase 12 Predictive Revenue
+ *   Engine — pipeline, deal probability, monthly/quarterly forecast,
+ *   accuracy, calibration, risk, all read-only).
  *
  * Extend this array (and DESCRIPTIONS below) as more routes adopt
  * verifyApiKeyAuth — no migration required, `scopes` is a plain String[].
@@ -22,6 +28,8 @@ export const API_KEY_SCOPES = [
   "export:deals:read",
   "export:contacts:read",
   "workflows:trigger",
+  "learning:read",
+  "forecast:read",
 ] as const;
 
 export type ApiKeyScope = (typeof API_KEY_SCOPES)[number];
@@ -31,6 +39,8 @@ export const API_KEY_SCOPE_DESCRIPTIONS: Record<ApiKeyScope, string> = {
   "export:deals:read": "Export deal/pipeline records (CSV, Excel, PDF).",
   "export:contacts:read": "Export contact records (CSV, Excel, PDF).",
   "workflows:trigger": "Trigger a workflow run programmatically.",
+  "learning:read": "Read closed-loop revenue learning data (patterns, signals, recommendations, validation).",
+  "forecast:read": "Read predictive revenue engine data (pipeline, deal probability, forecasts, accuracy, calibration, risk).",
 };
 
 export function isApiKeyScope(value: string): value is ApiKeyScope {

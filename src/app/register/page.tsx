@@ -22,7 +22,7 @@ export default async function RegisterPage() {
       className="flex min-h-svh flex-col items-center justify-center gap-6 bg-background px-6 py-16"
       style={brandThemeStyle(branding)}
     >
-      <PublicBrandHeader branding={branding} />
+      <PublicBrandHeader branding={branding} showDefaultLogo />
       <Suspense fallback={null}>
         <RegisterForm branding={branding} oauthProviders={getEnabledOAuthProviders()} />
       </Suspense>

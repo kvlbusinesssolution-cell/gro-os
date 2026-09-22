@@ -66,6 +66,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       # OpenRouter rotates which model backs its free tier — override without
       # a code change/rebuild if the hardcoded default in
@@ -80,6 +81,14 @@ services:
       # and its webhook signature verification.
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
+      # KVL sales inbox reply sync (src/lib/business-development/kvl-reply-sync-job.ts)
+      # — present in .env but was missing from this whitelist, so the job
+      # skipped every run with "not configured yet" despite real credentials.
+      KVL_IMAP_HOST: ${KVL_IMAP_HOST:-}
+      KVL_IMAP_PORT: ${KVL_IMAP_PORT:-}
+      KVL_IMAP_USER: ${KVL_IMAP_USER:-}
+      KVL_IMAP_PASSWORD: ${KVL_IMAP_PASSWORD:-}
+      KVL_IMAP_SECURE: ${KVL_IMAP_SECURE:-}
     depends_on:
       postgres:
         condition: service_healthy

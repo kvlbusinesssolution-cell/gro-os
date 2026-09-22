@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { computeProjectSpend } from "@/lib/projects/health";
 import { computeProjectHealthScore } from "@/lib/projects/health-score";
 import { computeChurnRisk } from "@/lib/clients/churn";
+import { evaluateSendingIdentityHealth, HEALTH_THRESHOLDS } from "@/lib/outreach/sending-identity";
 import type { RiskLevel } from "@/generated/prisma/client";
 
 const DAY_MS = 86_400_000;
@@ -190,7 +191,9 @@ export async function evaluateClientChurnRisk(organizationId: string): Promise<A
   return results;
 }
 
-const DEAL_STALLED_DAYS = 14;
+// Exported for reuse by src/lib/forecast/deal-risk.ts (Phase 12) — same
+// stalled-deal threshold, never redefined with a different number.
+export const DEAL_STALLED_DAYS = 14;
 // Matches the real Deal Stage seed names (src/app/onboarding/agents-actions.ts) —
 // there is no separate "is this stage closed" flag on DealStage.
 const CLOSED_DEAL_STAGE_NAMES = ["Won", "Lost", "Archived"];
@@ -571,4 +574,102 @@ export async function evaluateSupportSlaBreach(organizationId: string): Promise<
       severity,
     };
   });
+}
+
+/**
+ * Phase 4 (Email Deliverability & Sender Health Engine) — reuses
+ * evaluateSendingIdentityHealth (sending-identity.ts) as the single source
+ * of truth for the actual bounce/complaint math; this rule only decides
+ * whether that real result is alert-worthy. WARNING and CRITICAL both
+ * surface (CRITICAL already triggers the automatic pause inside
+ * evaluateSendingIdentityHealth itself — this alert is the visible record
+ * of that, not a second decision-maker).
+ */
+export async function evaluateEmailDeliverabilityRisk(organizationId: string): Promise<AlertRuleResult[]> {
+  const identities = await prisma.sendingIdentity.findMany({ where: { organizationId } });
+  const results: AlertRuleResult[] = [];
+
+  for (const identity of identities) {
+    const health = await evaluateSendingIdentityHealth(identity);
+    if (health.status !== "WARNING" && health.status !== "CRITICAL") continue;
+
+    const severity: RiskLevel = health.status === "CRITICAL" ? "CRITICAL" : "MEDIUM";
+    const worstFactor = health.factors.find((f) => f.status === health.status) ?? health.factors[0];
+
+    results.push({
+      relatedEntityType: "SendingIdentity",
+      relatedEntityId: identity.id,
+      title: `Sending identity ${health.status === "CRITICAL" ? "paused" : "at risk"}: ${identity.email}`,
+      message: `${worstFactor?.label ?? "Deliverability"}: ${worstFactor?.detail ?? "see health breakdown"}${health.action ? ` — ${health.action}` : ""}`,
+      formula: `hardBounceRate >= ${HEALTH_THRESHOLDS.HARD_BOUNCE_CRITICAL_PCT}% (critical) or ${HEALTH_THRESHOLDS.HARD_BOUNCE_WARNING_PCT}% (warning); complaintRate >= ${HEALTH_THRESHOLDS.COMPLAINT_CRITICAL_PCT}% (critical) or ${HEALTH_THRESHOLDS.COMPLAINT_WARNING_PCT}% (warning); minimum sample ${HEALTH_THRESHOLDS.MIN_SAMPLE} real sends`,
+      metricValue: health.hardBounceRate ?? health.complaintRate ?? 0,
+      thresholdValue: health.status === "CRITICAL" ? HEALTH_THRESHOLDS.HARD_BOUNCE_CRITICAL_PCT : HEALTH_THRESHOLDS.HARD_BOUNCE_WARNING_PCT,
+      severity,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Phase 12 (Predictive Revenue Engine) — a single open Deal whose
+ * deterministic risk assessment (src/lib/forecast/deal-risk.ts, every
+ * reason cited with real evidence) reached CRITICAL.
+ */
+export async function evaluateDealRiskCritical(organizationId: string): Promise<AlertRuleResult[]> {
+  const { computeDealRisk } = await import("@/lib/forecast/deal-risk");
+  const openDeals = await prisma.deal.findMany({
+    where: { organizationId, dealStage: { name: { notIn: ["Won", "Lost", "Archived"] } } },
+    select: { id: true, name: true, value: true },
+  });
+  if (openDeals.length === 0) return [];
+
+  const results: AlertRuleResult[] = [];
+  for (const deal of openDeals) {
+    const risk = await computeDealRisk(deal.id);
+    if (risk.riskLevel !== "CRITICAL") continue;
+    results.push({
+      relatedEntityType: "Deal",
+      relatedEntityId: deal.id,
+      title: `Deal "${deal.name}" is at critical risk`,
+      message: `"${deal.name}"${deal.value != null ? ` (value ${deal.value})` : ""}: ${risk.reasons.map((r) => r.reason).join("; ")}.`,
+      formula: `${risk.reasons.length} real risk signal(s) fired (CRITICAL threshold: 4+) — see src/lib/forecast/deal-risk.ts`,
+      metricValue: risk.reasons.length,
+      thresholdValue: 4,
+      severity: "CRITICAL",
+    });
+  }
+  return results;
+}
+
+const PIPELINE_CONCENTRATION_ENTITY_ID = "org-pipeline";
+
+/**
+ * Phase 12 — the org's real weighted open pipeline is concentrated in too
+ * few deals (src/lib/forecast/pipeline-risk.ts). Org-wide, so
+ * relatedEntityId is a fixed sentinel (Alert's real unique constraint is
+ * [organizationId, type, relatedEntityId] — a stable, non-null value here
+ * keeps this a real single row per org instead of colliding with null-based
+ * uniqueness quirks, same reasoning Phase 11 used for its
+ * NO_OPPORTUNITY_SENTINEL).
+ */
+export async function evaluatePipelineConcentrationRisk(organizationId: string): Promise<AlertRuleResult[]> {
+  const { computePipelineRisk } = await import("@/lib/forecast/pipeline-risk");
+  const risk = await computePipelineRisk(organizationId);
+  if (risk.riskLevel !== "HIGH" && risk.riskLevel !== "CRITICAL") return [];
+
+  const severity: RiskLevel = risk.riskLevel;
+  const topShare = risk.concentration.top1Share ?? risk.concentration.top3Share;
+  return [
+    {
+      relatedEntityType: "Organization",
+      relatedEntityId: PIPELINE_CONCENTRATION_ENTITY_ID,
+      title: "Pipeline concentration risk",
+      message: risk.reasons.map((r) => `${r.reason}: ${r.evidence}`).join(" "),
+      formula: `${risk.reasons.length} real concentration/stall/balance signal(s) fired — see src/lib/forecast/pipeline-risk.ts`,
+      metricValue: topShare !== null ? Math.round(topShare * 1000) / 10 : risk.reasons.length,
+      thresholdValue: 40,
+      severity,
+    },
+  ];
 }

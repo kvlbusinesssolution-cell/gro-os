@@ -68,6 +68,7 @@ export function GenerateDraftPanel({ contactId }: { contactId: string }) {
           <Select value={channel} onChange={(e) => setChannel(e.target.value as DraftChannel)} className="h-9 text-sm">
             <option value="EMAIL">Email</option>
             <option value="LINKEDIN">LinkedIn</option>
+            <option value="WHATSAPP">WhatsApp</option>
           </Select>
           <Select value={purpose} onChange={(e) => setPurpose(e.target.value as DraftPurpose)} className="h-9 text-sm">
             {PURPOSE_OPTIONS.map((opt) => (

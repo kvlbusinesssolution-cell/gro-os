@@ -170,7 +170,7 @@ export function DraftCard({ draft, canApprove }: DraftCardProps) {
               <CalendarX className="size-3.5" /> Cancel schedule
             </Button>
           )}
-          {draft.status === "QUEUED" && draft.channel === "EMAIL" && (
+          {draft.status === "QUEUED" && (draft.channel === "EMAIL" || draft.channel === "WHATSAPP") && (
             <Button size="sm" onClick={() => run(() => sendQueuedDraft(draft.id))} disabled={pending}>
               <Send className="size-3.5" /> Send now
             </Button>

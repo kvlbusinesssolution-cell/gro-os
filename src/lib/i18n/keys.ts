@@ -21,6 +21,8 @@ export const en = {
   "nav.opportunities": "AI Opportunities",
   "nav.priorityQueue": "AI Priority Queue",
   "nav.revenueCommandCenter": "Revenue Command Center",
+  "nav.learning": "Revenue Learning",
+  "nav.forecast": "Predictive Revenue",
   "nav.clients": "Clients",
   "nav.promptLibrary": "Prompt Library",
   "nav.hr": "HR",

@@ -21,6 +21,9 @@ import { getContactTimeline } from "@/lib/outreach/inbox";
 import { getEmailCrmBreadcrumb } from "@/lib/outreach/email-crm-breadcrumb";
 import { DraftCard } from "../../_components/draft-card";
 import { formatCurrency } from "@/app/dashboard/_lib/format";
+import { ConversationIntelligencePanel } from "./_components/conversation-intelligence-panel";
+import { VoiceCallPanel } from "./_components/voice-call-panel";
+import { checkVoiceEligibility } from "@/lib/outreach/voice-eligibility";
 
 const SENTIMENT_VARIANT: Record<string, "default" | "secondary" | "outline" | "accent"> = {
   POSITIVE: "accent",
@@ -46,9 +49,12 @@ export default async function InboxThreadPage({ params }: { params: Promise<{ co
     notFound();
   }
 
-  const [timeline, breadcrumb] = await Promise.all([
+  const [timeline, breadcrumb, conversationIntelligence, voiceEligibility, calls] = await Promise.all([
     getContactTimeline(organizationId, contactId),
     getEmailCrmBreadcrumb(organizationId, contactId),
+    prisma.conversationIntelligence.findFirst({ where: { organizationId, contactId }, orderBy: { generatedAt: "desc" } }),
+    checkVoiceEligibility(organizationId, contactId),
+    prisma.call.findMany({ where: { organizationId, contactId }, orderBy: { createdAt: "desc" } }),
   ]);
   const name = `${contact.firstName} ${contact.lastName ?? ""}`.trim();
   const currency = membership.organization.currency;
@@ -169,6 +175,9 @@ export default async function InboxThreadPage({ params }: { params: Promise<{ co
             </CardContent>
           </Card>
         )}
+
+        <ConversationIntelligencePanel contactId={contactId} initial={conversationIntelligence} />
+        <VoiceCallPanel contactId={contactId} initialEligibility={voiceEligibility} initialCalls={calls} />
 
         {timeline.length === 0 ? (
           <Card glass>

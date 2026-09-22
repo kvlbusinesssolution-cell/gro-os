@@ -95,6 +95,7 @@ export async function addOpportunityToCrmCore(
       organizationId,
       dealStageId: stage.id,
       companyId: opportunity.companyId,
+      sourceOpportunityId: opportunity.id,
       ownerUserId: userId,
       name: `${opportunity.company.name} — ${opportunity.title}`,
       value: opportunity.estimatedValue ?? null,

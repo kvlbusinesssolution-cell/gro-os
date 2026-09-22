@@ -84,29 +84,32 @@ model User {
   dashboards                Dashboard[]
   createdDashboardTemplates DashboardTemplate[]  @relation("DashboardTemplateCreatedBy")
 
-  ownedProjects                Project[]                 @relation("ProjectOwner")
-  createdProposals             Proposal[]                @relation("ProposalCreatedBy")
-  uploadedDocuments            Document[]                @relation("DocumentUploadedBy")
-  createdArticles              KnowledgeArticle[]        @relation("ArticleCreatedBy")
-  articleVersionsEdited        KnowledgeArticleVersion[] @relation("KnowledgeArticleVersionEditor")
-  knowledgeAttachmentsUploaded KnowledgeAttachment[]     @relation("KnowledgeAttachmentUploader")
-  ingestedDocumentsUploaded    IngestedDocument[]        @relation("IngestedDocumentUploader")
-  searchHistory                SearchHistory[]
-  bookmarks                    Bookmark[]
-  marketplaceInterests         MarketplaceInterest[]     @relation("MarketplaceInterestUser")
-  ownedCompanies               Company[]                 @relation("CompanyOwner")
-  createdWatchlists            Watchlist[]
-  watchlistAdditions           WatchlistCompany[]
-  savedSearches                SavedSearch[]
-  websiteScansCreated          WebsiteScan[]
-  ownedContacts                Contact[]                 @relation("ContactOwner")
-  createdCampaigns             Campaign[]
-  approvedEmailDrafts          EmailDraft[]              @relation("EmailDraftApprovedBy")
-  approvalDecisions            Approval[]
-  loggedReplies                Reply[]
+  ownedProjects                 Project[]                 @relation("ProjectOwner")
+  createdProposals              Proposal[]                @relation("ProposalCreatedBy")
+  uploadedDocuments             Document[]                @relation("DocumentUploadedBy")
+  createdArticles               KnowledgeArticle[]        @relation("ArticleCreatedBy")
+  articleVersionsEdited         KnowledgeArticleVersion[] @relation("KnowledgeArticleVersionEditor")
+  knowledgeAttachmentsUploaded  KnowledgeAttachment[]     @relation("KnowledgeAttachmentUploader")
+  ingestedDocumentsUploaded     IngestedDocument[]        @relation("IngestedDocumentUploader")
+  searchHistory                 SearchHistory[]
+  bookmarks                     Bookmark[]
+  marketplaceInterests          MarketplaceInterest[]     @relation("MarketplaceInterestUser")
+  ownedCompanies                Company[]                 @relation("CompanyOwner")
+  createdWatchlists             Watchlist[]
+  watchlistAdditions            WatchlistCompany[]
+  savedSearches                 SavedSearch[]
+  websiteScansCreated           WebsiteScan[]
+  ownedContacts                 Contact[]                 @relation("ContactOwner")
+  createdCampaigns              Campaign[]
+  approvedEmailDrafts           EmailDraft[]              @relation("EmailDraftApprovedBy")
+  approvalDecisions             Approval[]
+  loggedReplies                 Reply[]
+  assignedWhatsAppConversations WhatsAppConversation[]
+  capturedVoiceConsents         VoiceConsent[]
 
-  ownedDeals Deal[]     @relation("DealOwner")
-  reminders  Reminder[]
+  ownedDeals         Deal[]            @relation("DealOwner")
+  ownedOpportunities LeadOpportunity[] @relation("OpportunityOwner")
+  reminders          Reminder[]
 
   createdQuotations        Quotation[]        @relation("QuotationCreatedBy")
   createdContracts         Contract[]         @relation("ContractCreatedBy")
@@ -397,6 +400,16 @@ model Organization {
   caseStudies                Json?
   portfolio                  Json?
 
+  // Marks KVL Business Solutions' own real tenant organization — the ONE
+  // org exempt from plan-limit enforcement (checkPlanLimit,
+  // src/lib/billing/usage-metering.ts, always returns unlimited for it
+  // regardless of BillingAccount/Plan state). Every other organization
+  // (including agencies/resellers) goes through the real paid Plan catalog
+  // like any SaaS tenant. Never settable through any organization-scoped
+  // UI/action — same "operator flips it directly in the database" pattern
+  // as User.isPlatformOwner (src/lib/billing/platform-admin.ts).
+  isOwnerOrg Boolean @default(false)
+
   memberships Membership[]
   invitations Invitation[]
   workspace   Workspace?
@@ -414,26 +427,43 @@ model Organization {
   dashboardTemplates DashboardTemplate[]
   insights           Insight[]
 
-  companies            Company[]
-  clients              Client[]
-  projects             Project[]
-  proposals            Proposal[]
-  documents            Document[]
-  automationRules      AutomationRule[]
-  billingAccount       BillingAccount?
-  metricSnapshots      MetricSnapshot[]
-  marketplaceInterests MarketplaceInterest[]
-  watchlists           Watchlist[]
-  savedSearches        SavedSearch[]
-  recommendations      Recommendation[]
-  websiteScans         WebsiteScan[]
-  contacts             Contact[]
-  campaigns            Campaign[]
-  sequences            Sequence[]
-  emailDrafts          EmailDraft[]
-  approvals            Approval[]
-  replies              Reply[]
-  outreachMeetings     OutreachMeeting[]
+  companies                 Company[]
+  clients                   Client[]
+  projects                  Project[]
+  proposals                 Proposal[]
+  documents                 Document[]
+  automationRules           AutomationRule[]
+  billingAccount            BillingAccount?
+  metricSnapshots           MetricSnapshot[]
+  marketplaceInterests      MarketplaceInterest[]
+  watchlists                Watchlist[]
+  savedSearches             SavedSearch[]
+  recommendations           Recommendation[]
+  websiteScans              WebsiteScan[]
+  contacts                  Contact[]
+  campaigns                 Campaign[]
+  sequences                 Sequence[]
+  emailDrafts               EmailDraft[]
+  approvals                 Approval[]
+  replies                   Reply[]
+  outreachMeetings          OutreachMeeting[]
+  conversationIntelligence  ConversationIntelligence[]
+  revenueAttributions       RevenueAttribution[]
+  whatsappConversations     WhatsAppConversation[]
+  whatsappTemplates         WhatsAppTemplate[]
+  whatsappSendingIdentities WhatsAppSendingIdentity[]
+  calls                     Call[]
+  voiceConsents             VoiceConsent[]
+
+  learningObservations    LearningObservation[]
+  learningPatterns        LearningPattern[]
+  learningRecommendations LearningRecommendation[]
+  learningShadowScores    LearningShadowScore[]
+  learningEngineStates    LearningEngineState[]
+
+  predictionSnapshots  PredictionSnapshot[]
+  dealStageHistory     DealStageHistory[]
+  forecastCalibrations ForecastCalibration[]
 
   deals     Deal[]
   reminders Reminder[]
@@ -687,6 +717,12 @@ model Deal {
   companyId      String?
   contactId      String?
   sourceLeadId   String?
+  // Phase 13: real FK back to the AI-detected LeadOpportunity this Deal was
+  // converted from via addOpportunityToCrmCore, closing the canonical
+  // Opportunity -> Deal gap that revenue-attribution.ts previously bridged
+  // with a "most recent opportunity for this company" heuristic. Null for
+  // Deals created directly in the CRM (never from an Opportunity).
+  sourceOpportunityId String?
   ownerUserId    String?
 
   name              String
@@ -708,23 +744,26 @@ model Deal {
   company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
   contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
   sourceLead   Lead?        @relation(fields: [sourceLeadId], references: [id], onDelete: SetNull)
+  sourceOpportunity LeadOpportunity? @relation(fields: [sourceOpportunityId], references: [id], onDelete: SetNull)
   owner        User?        @relation("DealOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
 
-  proposals          Proposal[]
-  tasks              Task[]
-  documents          Document[]
-  reminders          Reminder[]
-  quotations         Quotation[]
-  contracts          Contract[]
-  invoices           Invoice[]
-  businessDocuments  BusinessDocument[]
-  projects           Project[]
+  proposals           Proposal[]
+  tasks               Task[]
+  documents           Document[]
+  reminders           Reminder[]
+  quotations          Quotation[]
+  contracts           Contract[]
+  invoices            Invoice[]
+  businessDocuments   BusinessDocument[]
+  projects            Project[]
   // Phase 8: Partner & Referral Client Acquisition Engine — commission(s)
   // owed to a ReferralPartner when this Deal is Won. Normally at most one row
   // (the Deal's own referred Company has at most one referralPartnerId), but
   // left many-valued rather than a unique 1:1 for the same "never fail a
   // write over an edge case" reasoning as Lead.convertedDeals.
-  partnerCommissions PartnerCommission[]
+  partnerCommissions  PartnerCommission[]
+  // Phase 7 (Revenue Attribution Engine).
+  revenueAttributions RevenueAttribution[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -733,6 +772,7 @@ model Deal {
   @@index([dealStageId])
   @@index([ownerUserId])
   @@index([companyId])
+  @@index([sourceOpportunityId])
 }
 
 enum AgentType {
@@ -1563,6 +1603,21 @@ model Company {
   // partner for the Partner Portal's stats and commission calculation.
   referralPartnerId String?
 
+  // ===== Phase 1 (GrowthOS Data & Enrichment Engine) =====
+  // Bare lowercase hostname (no protocol/www/path), computed the same way
+  // as dedup.ts's normalizeWebsiteHost — a fast, indexable identity signal
+  // distinct from `website` (which keeps whatever the source gave, e.g. a
+  // full URL with a path). Null until enrichment/dedup has actually
+  // resolved it, never guessed.
+  domain                  String?
+  // Orchestration-level state for enrichment.ts's enrichCompany() — distinct
+  // from the individual CompanyIntelligence/IntentScore/DecisionMaker rows
+  // it produces, which already track their own timestamps. This is "did a
+  // full enrichment pass run, and how did it go", nothing more.
+  enrichmentStatus        EnrichmentStatus @default(NEVER_ENRICHED)
+  lastEnrichedAt          DateTime?
+  enrichmentFailureReason String?          @db.Text
+
   organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   referralPartner   ReferralPartner?       @relation(fields: [referralPartnerId], references: [id], onDelete: SetNull)
   owner             User?                  @relation("CompanyOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
@@ -1589,18 +1644,28 @@ model Company {
   subscriptions     Subscription[]
 
   // Autonomous AI Business Development System (Phase 17)
-  leadOpportunities LeadOpportunity[]
-  buyerPersonas     BuyerPersona[]
+  leadOpportunities        LeadOpportunity[]
+  buyerPersonas            BuyerPersona[]
   // Phase 1: raw observed facts + AI interpretations backing intelligence/
   // opportunity output, each traceable to its originating source.
-  evidence          CompanyEvidence[]
+  evidence                 CompanyEvidence[]
   // Phase 3: real, publicly-sourced named decision-makers at this company.
-  decisionMakers    DecisionMaker[]
+  decisionMakers           DecisionMaker[]
   // Phase 4: deterministic buying-intent score, computed from this
   // company's own CompanyIntelligence signal lists + CompanyEvidence rows.
-  intentScore       IntentScore?
+  intentScore              IntentScore?
+  // Phase 2 (Buying Intent Intelligence Engine): append-only score/stage change log.
+  intentScoreHistory       IntentScoreHistory[]
   // KVL-only owner rate-negotiation escalation threads for this company.
-  rateNegotiations  RateNegotiation[]
+  rateNegotiations         RateNegotiation[]
+  // Phase 6 (AI Conversation Intelligence): append-only per-thread analysis log.
+  conversationIntelligence ConversationIntelligence[]
+  // Phase 7 (Revenue Attribution Engine).
+  revenueAttributions      RevenueAttribution[]
+  // Phase 8 (WhatsApp Business Outreach).
+  whatsappConversations    WhatsAppConversation[]
+  // Phase 10 (AI Voice Sales Engine).
+  calls                    Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2096,14 +2161,18 @@ model Invoice {
   // for this unpaid invoice, so the job never re-notifies every run.
   reminderSentAt    DateTime?
 
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  company         Company?          @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  deal            Deal?             @relation(fields: [dealId], references: [id], onDelete: SetNull)
-  client          Client?           @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  createdByUser   User?             @relation("InvoiceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  organization    Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company         Company?             @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  deal            Deal?                @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  client          Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  createdByUser   User?                @relation("InvoiceCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   lineItems       InvoiceLineItem[]
   documents       Document[]
   recommendations Recommendation[]
+  // Phase 7 (Revenue Attribution Engine) — @@unique([organizationId, invoiceId,
+  // attributionModel]) below keeps this effectively one row per invoice per
+  // attribution-model version (currently a single "v1" model is used).
+  attributions    RevenueAttribution[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2112,6 +2181,126 @@ model Invoice {
   @@index([organizationId])
   @@index([dealId])
   @@index([status])
+}
+
+enum AttributionType {
+  // A single, unambiguous, real evidence chain (proven via direct foreign
+  // keys — a real SENT EmailDraft that received a real Reply from the same
+  // contact, or a single real non-MANUAL CompanySource with no competing
+  // campaign) connects exactly one source/campaign to this revenue.
+  DIRECT
+  // Two or more real, independently-proven touchpoints (campaigns and/or
+  // sources) are genuinely connected to the same revenue's journey — the
+  // system deliberately does not pick an arbitrary "winner" among them.
+  ASSISTED
+  // The relationship cannot be proven with real stored records (orphan
+  // invoice/deal, no company, no campaign, no non-MANUAL source, or
+  // incomplete historical data). Never guessed.
+  UNKNOWN
+}
+
+enum AttributionConfidence {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+/**
+ * Phase 7 (Revenue Attribution Engine) — deterministic, non-AI attribution
+ * of REAL PAID revenue back to its real source/campaign chain.
+ * ===== Revenue anchor: Invoice, not a separate Revenue/Payment model =====
+ * This schema has no dedicated Revenue or Payment model — Client 360
+ * (client-360.ts's deriveRevenue) already established `Invoice.amountPaid`
+ * as the one authoritative "paid revenue" figure, and `Invoice.paidAt` as
+ * its payment timestamp. Phase 7 reuses that exact definition rather than
+ * inventing a new one: one `RevenueAttribution` row is computed per real
+ * Invoice with `amountPaid > 0`, and `invoiceId` plays the role the spec's
+ * illustrative `revenue_id`/`payment_id` fields would have played had those
+ * models existed. `revenueAmount` is a snapshot of `amountPaid` at
+ * computation time (recomputation updates it, e.g. after a partial payment).
+ * ===== Deliberately NOT the same figure as acquisition-funnel.ts =====
+ * `src/lib/analytics/acquisition-funnel.ts`'s existing `bySource`/
+ * `byIndustry`/`byCountry`/`byService`/`byCampaign` all sum `Deal.value` on
+ * Won deals — that is DEAL VALUE / PIPELINE, not paid revenue, and that
+ * file is left untouched. Phase 7's views are captioned "Paid Revenue
+ * (Attributed)" specifically to avoid being confused with that existing,
+ * differently-defined number.
+ * ===== Why a dedicated model (not read-time-only) =====
+ * Attribution must be auditable/historical (§43), idempotent across reruns
+ * (§45 — enforced by the compound unique below), and cheap to read on a
+ * dashboard without re-walking the whole evidence chain on every request
+ * (§47) — a plain read-time compose function could not satisfy all three.
+ * Every non-organizationId/invoiceId/dealId/companyId/contactId/campaignId
+ * reference below (leadId, opportunityId, proposalId, meetingId, replyId,
+ * emailDraftId, sequenceId) is a plain scalar id, not a Prisma relation —
+ * drilldown code resolves them with a direct `findUnique` by id rather than
+ * `include`, which avoids adding back-relations to seven more models for
+ * fields that are only ever read one at a time on the attribution detail
+ * page, never joined/grouped-by.
+ */
+model RevenueAttribution {
+  id             String  @id @default(cuid())
+  organizationId String
+  invoiceId      String
+  dealId         String?
+  companyId      String?
+  contactId      String?
+  leadId         String?
+  opportunityId  String?
+  proposalId     String?
+  meetingId      String?
+  replyId        String?
+  emailDraftId   String?
+  campaignId     String?
+  sequenceId     String?
+
+  // Snapshot of Company.source (the original, never-overwritten discovery
+  // source) at computation time — the real "Lead Source" dimension (§14),
+  // kept distinct from campaignId.
+  source CompanySource?
+
+  attributionType  AttributionType       @default(UNKNOWN)
+  confidence       AttributionConfidence @default(LOW)
+  // Which named, documented rule produced this result — see
+  // revenue-attribution.ts's ATTRIBUTION RULES doc comment. Never a bare
+  // AI explanation standing in for a real rule (§55).
+  attributionRule  String
+  // Attribution model/version — part of the idempotency key (§45). A future
+  // second model (e.g. first-touch vs last-touch) would use a different
+  // value here rather than overwriting this one's meaning.
+  attributionModel String                @default("v1")
+
+  revenueAmount Float
+  currency      String?
+
+  // Ordered, real chain: [{ stage, recordType, recordId, proofType:
+  // "DIRECT_FK" | "COMPANY_ASSOCIATION", occurredAt?, description }].
+  // Stages with no real record are simply omitted (§3) — never invented.
+  evidence         Json @default("[]")
+  // For ASSISTED only: every independently-proven touchpoint, e.g.
+  // [{ type: "CAMPAIGN" | "SOURCE", id, label, evidenceSummary }].
+  touchpoints      Json @default("[]")
+  // Orphan/missing-link findings surfaced while building this row's chain
+  // (§44) — e.g. "invoice has no dealId", "deal has no companyId".
+  dataQualityFlags Json @default("[]")
+
+  computedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  deal         Deal?        @relation(fields: [dealId], references: [id], onDelete: SetNull)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact      Contact?     @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, invoiceId, attributionModel])
+  @@index([organizationId])
+  @@index([organizationId, attributionType])
+  @@index([dealId])
+  @@index([companyId])
+  @@index([campaignId])
 }
 
 model InvoiceLineItem {
@@ -3959,9 +4148,66 @@ model IntentScore {
   reasoning String     @db.Text
   scoredAt  DateTime   @default(now())
 
+  // ===== Phase 2 (Buying Intent Intelligence Engine) =====
+  // Deterministic, rule-based classification (see classifyBuyingStage in
+  // intent-scoring.ts) from real CRM/outreach state — Deal stage, Proposal
+  // status, Reply intent, meeting activity — NEVER derived from the score
+  // number alone ("do not classify a company as DECISION merely because its
+  // intent score is high"). Defaults exist only so this migration is safe
+  // against IntentScore rows that predate Phase 2 — every fresh
+  // computeIntentScore call always sets a real, reasoned value.
+  buyingStage           BuyingStage @default(UNKNOWN)
+  buyingStageReasoning  String      @default("Not yet classified.") @db.Text
+  buyingStageConfidence Float       @default(0)
+
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
 
   @@index([companyId])
+}
+
+// Phase 2 (Buying Intent Intelligence Engine) — the buying-journey stage
+// taxonomy the spec asked for, deliberately distinct from IntentBand (signal
+// STRENGTH: HIGH/MEDIUM/LOW/NONE) and from the workspace-configurable
+// PipelineStage/DealStage (free-text, admin-defined pipeline steps) — no
+// existing enum already covered this concept (confirmed before adding it).
+enum BuyingStage {
+  UNKNOWN
+  TARGET
+  AWARENESS
+  CONSIDERATION
+  DECISION
+  NEGOTIATION
+  CUSTOMER
+  LOST
+}
+
+// Phase 2 (Buying Intent Intelligence Engine) — append-only change log,
+// mirroring PredictionCalibration's established "one row per computation,
+// never upserted" pattern (see prisma/schema.prisma's own doc comment on
+// that model) rather than inventing a new history convention. A row is only
+// ever written when computeIntentScore (intent-scoring.ts) finds the score,
+// band, OR stage genuinely changed since the current IntentScore row —
+// never on a no-op recompute, so this never grows into log noise. History
+// rows are never updated or deleted.
+model IntentScoreHistory {
+  id             String       @id @default(cuid())
+  organizationId String
+  companyId      String
+  previousScore  Int?
+  newScore       Int
+  scoreChange    Int
+  previousBand   IntentBand?
+  newBand        IntentBand
+  previousStage  BuyingStage?
+  newStage       BuyingStage
+  reason         String       @db.Text
+  triggerSignal  String?
+  calculatedAt   DateTime     @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([companyId, calculatedAt])
 }
 
 // One row per AI Company Intelligence report generation — kept as a log
@@ -4101,8 +4347,95 @@ model DecisionMaker {
 
   company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  // Phase 1 (GrowthOS Data & Enrichment Engine): real Contacts confidently
+  // matched to this named public decision-maker — see Contact.decisionMakerId.
+  contacts         Contact[]
 
   @@index([companyId])
+}
+
+// ===== Phase 1 (GrowthOS Data & Enrichment Engine) =====
+// Orchestration state for enrichment.ts's enrichCompany()/enrichContact() —
+// distinct from CompanyIntelligence/CompanyEvidence/IntentScore/
+// DecisionMaker, which each already track their own freshness. This tracks
+// only "did an enrichment PASS run, across those existing systems, and how
+// did it go" — never a replacement for any of them.
+enum EnrichmentStatus {
+  NEVER_ENRICHED
+  QUEUED
+  RUNNING
+  PARTIAL
+  COMPLETED
+  FAILED
+  STALE
+}
+
+enum EnrichmentEntityType {
+  COMPANY
+  CONTACT
+}
+
+enum EnrichmentTrigger {
+  MANUAL
+  SCHEDULED
+  BATCH
+}
+
+enum EnrichmentRunStatus {
+  QUEUED
+  RUNNING
+  PARTIAL
+  COMPLETED
+  FAILED
+  RETRYING
+}
+
+// One row per enrichment attempt (manual button, batch action, or the
+// scheduled stale-reenrichment job) — a real, queryable history distinct
+// from CompanyEvidence (which logs individual FACTS, not enrichment RUNS).
+// `organizationId`/`triggeredByUserId` are deliberately plain FK-shaped
+// strings with no Prisma relation object, matching AuditLog's existing
+// precedent for a log-type model — this is a history log, not a relation
+// graph node, and doesn't need reverse-navigable relations on
+// Organization/User for anything this phase requires.
+model EnrichmentRun {
+  id                String               @id @default(cuid())
+  organizationId    String
+  entityType        EnrichmentEntityType
+  entityId          String
+  companyId         String?
+  triggeredBy       EnrichmentTrigger
+  triggeredByUserId String?
+  status            EnrichmentRunStatus  @default(QUEUED)
+  // Which underlying steps (e.g. "COMPANY_INTELLIGENCE", "INTENT_SCORE",
+  // "DECISION_MAKERS", "OPPORTUNITIES") actually completed vs failed this
+  // run — the real basis for COMPLETED vs PARTIAL vs FAILED below, never
+  // just "the function didn't throw".
+  stepsCompleted    String[]             @default([])
+  stepsFailed       String[]             @default([])
+  factsFound        Int                  @default(0)
+  error             String?              @db.Text
+  retryCount        Int                  @default(0)
+  startedAt         DateTime             @default(now())
+  finishedAt        DateTime?
+
+  // ===== Phase 3 (AI Company Research Engine) =====
+  // Reuses this EXACT row as the "research run" history record the spec
+  // asked for (QUEUED/RUNNING/PARTIAL/COMPLETED/FAILED/STALE — Company.
+  // enrichmentStatus already has all 6 values; a second parallel research-
+  // run model would duplicate this one). Both fields are honest-best-effort,
+  // never fabricated: `confidence` is copied from the real
+  // CompanyIntelligence.confidenceScore produced this run (null if that
+  // step didn't run/failed); `aiProvider` is backfilled from the most
+  // recent real AIUsageEvent in this org during [startedAt, finishedAt]
+  // (null if none found — never guessed).
+  confidence Float?
+  aiProvider String?
+
+  @@index([organizationId])
+  @@index([companyId])
+  @@index([entityType, entityId])
+  @@index([status])
 }
 
 enum CompanyTimelineEventType {
@@ -4679,6 +5012,16 @@ enum ContactStatus {
 enum DraftChannel {
   EMAIL
   LINKEDIN
+  // Phase 8 (WhatsApp Business Outreach) — sent/received only through the
+  // org's connected, officially-approved WhatsApp Business provider
+  // (Twilio's WhatsApp API today — see whatsapp-provider.ts). Never an
+  // unofficial WhatsApp Web/QR-session channel.
+  WHATSAPP
+  // Phase 10 (AI Voice Sales Engine) — used ONLY on the real Reply row that
+  // carries an actual call's real transcript text (see voice-call.ts) so
+  // Phase 6 Conversation Intelligence can analyze it unchanged — never used
+  // on an EmailDraft (a phone call is not a "draft message").
+  VOICE
 }
 
 enum DraftPurpose {
@@ -4712,6 +5055,10 @@ enum DraftStatus {
   FAILED
   REJECTED
   BOUNCED
+  // Phase 8 — only ever set from a real, provider-confirmed WhatsApp
+  // status-callback webhook event (never assumed from SENT — §11).
+  DELIVERED
+  READ
 }
 
 enum ApprovalDecision {
@@ -4777,24 +5124,48 @@ model Contact {
   // interaction-frequency model to compute it from honestly).
   relationshipScore Int?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
-  owner        User?        @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  // ===== Phase 1 (GrowthOS Data & Enrichment Engine) =====
+  // Real FK to a verified DecisionMaker row at this same company, replacing
+  // personalization.ts's prior fragile name-string match as the source of
+  // truth once a confident link is made (see decision-maker-matching.ts's
+  // findMatchingDecisionMaker) — null means "no confident match found yet",
+  // never a guessed link. Deliberately SetNull (never cascade-delete a
+  // Contact just because its matched DecisionMaker row is removed).
+  decisionMakerId          String?
+  // 0-1, a deterministic (never AI-guessed) estimate from job-title keyword
+  // matching — see enrichment.ts's SENIORITY_SIGNALS. Distinct from
+  // DecisionMaker.confidence (identity-verification confidence for a named
+  // public decision-maker) — this scores "how likely is THIS contact,
+  // whoever they are, to be a decision maker" from their own stored title.
+  decisionMakerProbability Float?
+  enrichmentStatus         EnrichmentStatus @default(NEVER_ENRICHED)
+  lastEnrichedAt           DateTime?
 
-  campaigns        CampaignContact[]
-  emailDrafts      EmailDraft[]
-  replies          Reply[]
-  outreachMeetings OutreachMeeting[]
-  tasks            Task[]
-  deals            Deal[]
-  reminders        Reminder[]
-  quotations       Quotation[]
-  rateNegotiations RateNegotiation[]
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company       Company?       @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  owner         User?          @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  decisionMaker DecisionMaker? @relation(fields: [decisionMakerId], references: [id], onDelete: SetNull)
+
+  campaigns                CampaignContact[]
+  emailDrafts              EmailDraft[]
+  replies                  Reply[]
+  outreachMeetings         OutreachMeeting[]
+  tasks                    Task[]
+  deals                    Deal[]
+  reminders                Reminder[]
+  quotations               Quotation[]
+  rateNegotiations         RateNegotiation[]
+  conversationIntelligence ConversationIntelligence[]
+  revenueAttributions      RevenueAttribution[]
+  whatsappConversations    WhatsAppConversation[]
+  calls                    Call[]
+  voiceConsent             VoiceConsent?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([organizationId])
+  @@index([decisionMakerId])
 }
 
 model Campaign {
@@ -4815,14 +5186,25 @@ model Campaign {
   estimatedSuccessPotential Int?
   createdByUserId           String
 
-  organization       Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  createdByUser      User                        @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
-  contacts           CampaignContact[]
-  sequences          Sequence[]
-  emailDrafts        EmailDraft[]
-  replies            Reply[]
-  outreachMeetings   OutreachMeeting[]
-  analyticsSnapshots CampaignAnalyticsSnapshot[]
+  // ===== Phase 4 (Email Deliverability & Sender Health Engine) =====
+  // Set only when `status` was moved to PAUSED by the automatic circuit
+  // breaker (email-health.ts) — never set for a manual pause via the
+  // existing setCampaignStatus, so the UI can distinguish "a human paused
+  // this" from "the safety system paused this and why".
+  pausedReason String?   @db.Text
+  pausedAt     DateTime?
+
+  organization          Organization                @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser         User                        @relation(fields: [createdByUserId], references: [id], onDelete: Cascade)
+  contacts              CampaignContact[]
+  sequences             Sequence[]
+  emailDrafts           EmailDraft[]
+  replies               Reply[]
+  outreachMeetings      OutreachMeeting[]
+  analyticsSnapshots    CampaignAnalyticsSnapshot[]
+  revenueAttributions   RevenueAttribution[]
+  whatsappConversations WhatsAppConversation[]
+  calls                 Call[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4872,6 +5254,14 @@ model EmailDraft {
   contactId            String
   sequenceId           String?
   sequenceStepIndex    Int?
+  // Phase 6 (AI Conversation Intelligence) — set only for a real AI-
+  // suggested reply generated in direct response to analyzing a specific
+  // inbound Reply. Makes the "suggested reply -> the message it's replying
+  // to" relationship explicit and traceable, without inventing a second
+  // draft-lifecycle model (this draft still goes through the exact same
+  // DRAFT -> PENDING_APPROVAL -> APPROVED -> QUEUED -> SENT pipeline as
+  // every other EmailDraft).
+  inReplyToId          String?
   channel              DraftChannel
   purpose              DraftPurpose
   tone                 EmailTone
@@ -4921,6 +5311,12 @@ model EmailDraft {
   bouncedAt            DateTime?
   bounceReason         String?
   complainedAt         DateTime?
+  // Phase 4: "hard" | "soft" | "unknown" — best-effort extraction from
+  // Resend's real bounce payload where a sub-type field is present; "unknown"
+  // (never a silently-assumed "soft") when it isn't, so suppression logic can
+  // treat an unclassifiable bounce conservatively rather than pretending
+  // certainty it doesn't have.
+  bounceType           String?
   // Set once by linkedInReminderJob (src/lib/scheduler/registry.ts) after it
   // nudges the owner about a LINKEDIN draft that's sat APPROVED/QUEUED past
   // the reminder threshold — prevents re-reminding on every subsequent tick.
@@ -4928,16 +5324,33 @@ model EmailDraft {
   // this set).
   reminderSentAt       DateTime?
 
-  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  campaign         Campaign?         @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  contact          Contact           @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  sequence         Sequence?         @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
-  generatedByAgent AIAgentInstance?  @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
-  approvedByUser   User?             @relation("EmailDraftApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
-  approvals        Approval[]
-  replies          Reply[]
-  outreachMeetings OutreachMeeting[]
-  attachments      Document[]
+  // ===== Phase 8 (WhatsApp Business Outreach) =====
+  // Generic provider message id (Twilio's MessageSid today) — distinct from
+  // the Resend-specific field above; the real correlation key the WhatsApp
+  // webhook uses to match a status-callback event back to this row.
+  providerMessageId      String?   @unique
+  // Set only from a real, signature-verified Twilio status-callback webhook
+  // event — never assumed from SENT (§11: sent != delivered != read).
+  deliveredAt            DateTime?
+  readAt                 DateTime?
+  failedAt               DateTime?
+  whatsappConversationId String?
+  whatsappTemplateId     String?
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  campaign             Campaign?             @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  contact              Contact               @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  sequence             Sequence?             @relation(fields: [sequenceId], references: [id], onDelete: SetNull)
+  whatsappConversation WhatsAppConversation? @relation(fields: [whatsappConversationId], references: [id], onDelete: SetNull)
+  whatsappTemplate     WhatsAppTemplate?     @relation(fields: [whatsappTemplateId], references: [id], onDelete: SetNull)
+  inReplyTo            Reply?                @relation("DraftInReplyToReply", fields: [inReplyToId], references: [id], onDelete: SetNull)
+  generatedByAgent     AIAgentInstance?      @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
+  approvedByUser       User?                 @relation("EmailDraftApprovedBy", fields: [approvedByUserId], references: [id], onDelete: SetNull)
+  approvals            Approval[]
+  replies              Reply[]
+  outreachMeetings     OutreachMeeting[]
+  attachments          Document[]
+  providerEvents       EmailProviderEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -4945,6 +5358,290 @@ model EmailDraft {
   @@index([organizationId])
   @@index([contactId])
   @@index([campaignId])
+}
+
+// ===== Phase 4 (Email Deliverability & Sender Health Engine) =====
+// No "Sending Identity" concept existed before this phase — the real sender
+// was only ever a flat EMAIL_FROM env var / white-label resolved address
+// (Resend/SMTP) or the org's own connected mailbox (Gmail/Outlook), with
+// zero per-identity send counters, limits, or health tracking anywhere.
+// This is the genuinely missing registry, lazily upserted by email address
+// the first time a send actually happens through it (see
+// src/lib/outreach/sending-identity.ts) — never a manual-setup requirement
+// that would block existing sends.
+enum SendingIdentityProvider {
+  RESEND
+  SMTP
+  GMAIL
+  OUTLOOK
+  // Phase 8 — recorded on EmailProviderEvent rows sourced from the WhatsApp
+  // webhook; WhatsappSendingIdentity (its own model, phone-keyed rather than
+  // email+domain-keyed) is the real rate-limit/health record for this value.
+  TWILIO_WHATSAPP
+}
+
+enum SendingIdentityStatus {
+  ACTIVE
+  THROTTLED
+  COOLDOWN
+  PAUSED
+}
+
+model SendingIdentity {
+  id             String                  @id @default(cuid())
+  // Required, always tenant-scoped — deliberately NOT nullable/"global",
+  // per rule 13 (never let one tenant's sending health/suppression data
+  // leak into another's). Postgres NULL also isn't reliably unique-
+  // constrainable, which would have made the [organizationId, email]
+  // uniqueness guarantee below unsafe for a shared/global row anyway.
+  organizationId String
+  email          String
+  domain         String
+  provider       SendingIdentityProvider
+  status         SendingIdentityStatus   @default(ACTIVE)
+
+  // Configurable, documented defaults (see sending-identity.ts) — never
+  // silently invented at read time, always a real stored value an admin can
+  // change.
+  dailyLimit  Int @default(300)
+  hourlyLimit Int @default(50)
+
+  // Real running counters, reset by the scheduled health-check job (see
+  // registry.ts's "email-health-check") — never recomputed via an expensive
+  // full-table scan on every send.
+  sentToday       Int      @default(0)
+  sentThisHour    Int      @default(0)
+  countersResetAt DateTime @default(now())
+
+  cooldownUntil  DateTime?
+  cooldownReason String?   @db.Text
+  pausedAt       DateTime?
+  pausedReason   String?   @db.Text
+
+  lastSendAt      DateTime?
+  lastErrorAt     DateTime?
+  lastErrorReason String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events EmailProviderEvent[]
+
+  @@unique([organizationId, email])
+  @@index([organizationId])
+  @@index([status])
+}
+
+// Real, idempotent provider-event log — "the same provider event must not
+// be counted twice" (spec, verbatim). `providerEventId` is Resend's own
+// webhook delivery id (Svix's `svix-id`) where available; a unique
+// constraint makes re-delivery a genuine no-op at the database level, not
+// just an application-level check that could race.
+enum EmailProviderEventType {
+  SENT
+  DELIVERED
+  BOUNCED
+  HARD_BOUNCE
+  SOFT_BOUNCE
+  OPENED
+  CLICKED
+  REPLIED
+  UNSUBSCRIBED
+  COMPLAINT
+  FAILED
+  RATE_LIMITED
+  // Phase 8 — WhatsApp-only; email in this app has no read-receipt concept.
+  READ
+}
+
+model EmailProviderEvent {
+  id                String                  @id @default(cuid())
+  organizationId    String
+  emailDraftId      String?
+  sendingIdentityId String?
+  provider          SendingIdentityProvider
+  eventType         EmailProviderEventType
+  recipient         String
+  // Resend/Svix's own event id — the real idempotency key. Null for events
+  // synthesized from this app's own tracking (open/click pixel), which
+  // already have their own dedup via EmailDraft.firstOpenedAt/firstClickedAt.
+  providerEventId   String?                 @unique
+  metadata          Json?
+  receivedAt        DateTime                @default(now())
+
+  emailDraft      EmailDraft?      @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
+  sendingIdentity SendingIdentity? @relation(fields: [sendingIdentityId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, receivedAt])
+  @@index([sendingIdentityId])
+}
+
+// Real suppression list — the single choke-point checkSuppression()
+// (src/lib/outreach/suppression.ts) reads before EVERY send, across every
+// provider. Always tenant-scoped (see SendingIdentity's doc comment above
+// for why this phase deliberately drops the earlier "nullable = global"
+// idea — rule 13 tenant isolation + Postgres NULL-uniqueness safety). This
+// directly fixes a confirmed real gap: before this phase, only
+// Contact.status === UNSUBSCRIBED was checked, only by the manual/scheduled
+// send path — bouncedAt/complainedAt were never checked anywhere, and KVL's
+// own automated first-touch path checked neither.
+enum SuppressionReason {
+  UNSUBSCRIBED
+  SPAM_COMPLAINT
+  HARD_BOUNCE
+  MANUAL_SUPPRESSION
+  LEGAL_REQUEST
+  OTHER
+}
+
+// Phase 8 (WhatsApp Business Outreach) — extended in place (never a second
+// suppression model, per that phase's explicit §6/§7 rule) with `channel` +
+// `phone`. `email` is now nullable: an EMAIL-channel row still always has a
+// real email and no phone; a WHATSAPP-channel row always has a real E.164
+// phone and no email. Two separate unique indexes (not one compound on all
+// three columns) because Postgres treats each NULL as distinct, so
+// `[organizationId, channel, email]` alone would never collide across
+// multiple phone-only WhatsApp rows (email always NULL there) — the second
+// index is what actually enforces "no duplicate phone suppression per org".
+model SuppressionEntry {
+  id             String            @id @default(cuid())
+  organizationId String
+  channel        DraftChannel      @default(EMAIL)
+  email          String?
+  phone          String?
+  reason         SuppressionReason
+  source         String
+  createdAt      DateTime          @default(now())
+
+  @@unique([organizationId, channel, email])
+  @@unique([organizationId, channel, phone])
+  @@index([email])
+  @@index([phone])
+}
+
+/**
+ * Phase 8 (WhatsApp Business Outreach) — one real, active WhatsApp
+ * conversation per (organizationId, contactId) with the org's connected
+ * provider (Twilio's WhatsApp API — see whatsapp-provider.ts). Deliberately
+ * a NEW model: there is no existing generic "conversation" row for any
+ * channel in this schema (Email's "conversation" is just the implicit
+ * (organizationId, contactId) grouping used throughout Phases 5/6) — this
+ * genuinely new stateful entity (status, assignment, provider correlation
+ * id) has no existing table to extend.
+ */
+model WhatsAppConversation {
+  id                     String                     @id @default(cuid())
+  organizationId         String
+  companyId              String?
+  contactId              String
+  provider               SendingIdentityProvider    @default(TWILIO_WHATSAPP)
+  // The real WhatsApp Business phone number this conversation is with (the
+  // Contact's own phone at the time the conversation started — kept here so
+  // a later phone-field edit on Contact never silently rewrites history).
+  phoneNumber            String
+  status                 WhatsAppConversationStatus @default(OPEN)
+  // Twilio has no single "conversation id" for a WhatsApp session the way
+  // some providers do — null today, reserved for a provider that does
+  // (e.g. Meta's own conversation-id concept) rather than fabricated.
+  providerConversationId String?
+  startedAt              DateTime                   @default(now())
+  lastMessageAt          DateTime?
+  lastInboundAt          DateTime?
+  lastOutboundAt         DateTime?
+  assignedUserId         String?
+  campaignId             String?
+  opportunityId          String?
+  // Set only from a real provider-reported restriction (e.g. a 24-hour
+  // session window closed, an account-level restriction) — never inferred.
+  restrictedReason       String?                    @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  assignedUser User?        @relation(fields: [assignedUserId], references: [id], onDelete: SetNull)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  messages     EmailDraft[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, contactId])
+  @@index([organizationId, status])
+}
+
+enum WhatsAppConversationStatus {
+  OPEN
+  CLOSED
+  RESTRICTED
+}
+
+/**
+ * Phase 8 — approved WhatsApp message templates. A genuinely new concept:
+ * email has no provider-side template-approval workflow in this app.
+ * `approvalStatus` mirrors the provider's own real state (Twilio Content
+ * API approval) — never a locally-invented "approved" flag.
+ */
+model WhatsAppTemplate {
+  id                 String                         @id @default(cuid())
+  organizationId     String
+  providerTemplateId String
+  name               String
+  language           String
+  category           String
+  variables          String[]                       @default([])
+  approvalStatus     WhatsAppTemplateApprovalStatus @default(PENDING)
+  lastSyncedAt       DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  messages     EmailDraft[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, providerTemplateId])
+}
+
+enum WhatsAppTemplateApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DISABLED
+  UNKNOWN
+}
+
+/**
+ * Phase 8 — rate-limit/health state for the org's WhatsApp Business sender
+ * number. Mirrors SendingIdentity's exact counters/cooldown algorithm
+ * (sending-identity.ts) but is its own model rather than reusing that table
+ * directly: SendingIdentity is keyed on `email`+`domain` (both required,
+ * both meaningless for a phone-based sender) — forcing a phone number into
+ * an `email` column would be a dishonest field repurpose, not real reuse.
+ */
+model WhatsAppSendingIdentity {
+  id              String                @id @default(cuid())
+  organizationId  String
+  phoneNumber     String
+  status          SendingIdentityStatus @default(ACTIVE)
+  dailyLimit      Int                   @default(250)
+  hourlyLimit     Int                   @default(50)
+  sentToday       Int                   @default(0)
+  sentThisHour    Int                   @default(0)
+  countersResetAt DateTime              @default(now())
+  cooldownUntil   DateTime?
+  cooldownReason  String?               @db.Text
+  pausedAt        DateTime?
+  pausedReason    String?               @db.Text
+  lastSendAt      DateTime?
+  lastErrorAt     DateTime?
+  lastErrorReason String?               @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, phoneNumber])
+  @@index([organizationId])
 }
 
 // Audit trail of decisions on a draft — multiple rows per draft are allowed
@@ -4998,19 +5695,355 @@ model Reply {
   // human actually opening the thread. Null means never explicitly opened.
   readAt            DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  emailDraft   EmailDraft?  @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
-  loggedByUser User         @relation(fields: [loggedByUserId], references: [id], onDelete: Cascade)
+  organization         Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact              Contact          @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign             Campaign?        @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  emailDraft           EmailDraft?      @relation(fields: [emailDraftId], references: [id], onDelete: SetNull)
+  loggedByUser         User             @relation(fields: [loggedByUserId], references: [id], onDelete: Cascade)
+  // Phase 6: real AI-suggested EmailDraft(s) generated in direct response to this reply.
+  suggestedReplyDrafts EmailDraft[]     @relation("DraftInReplyToReply")
   // KVL's own owner-escalation workflow (see RateNegotiation below) — a
   // reply classified PRICE_QUESTION gets exactly one negotiation thread.
-  rateNegotiation RateNegotiation?
+  rateNegotiation      RateNegotiation?
 
   createdAt DateTime @default(now())
 
   @@index([organizationId])
   @@index([contactId])
+}
+
+// ===== Phase 10 (AI Voice Sales Engine) =====
+//
+// ===== Consent, not suppression =====
+// Phase 4's SuppressionEntry (extended for WHATSAPP in Phase 8) is a
+// NEGATIVE list — "assume eligible unless explicitly opted out." Voice
+// calling cannot use that default (§8: "Do not treat having a phone number
+// as consent... If consent is required and absent: DO NOT CALL"). This is
+// a genuinely new, POSITIVE consent record — absence of a row (or a row
+// with status UNKNOWN) means NOT eligible, the inverse of every other
+// channel's default in this app. Suppression is still checked in addition
+// (an explicit VOICE opt-out always blocks regardless of any consent on
+// file) — see voice-eligibility.ts.
+enum VoiceConsentStatus {
+  GRANTED
+  DENIED
+  UNKNOWN
+}
+
+enum VoiceRecordingConsent {
+  RECORDING_ALLOWED
+  RECORDING_REQUIRES_CONSENT
+  RECORDING_NOT_ALLOWED
+  UNKNOWN
+}
+
+model VoiceConsent {
+  id             String @id @default(cuid())
+  organizationId String
+  contactId      String @unique
+
+  status           VoiceConsentStatus @default(UNKNOWN)
+  // Never inferred from a website/listing/email/LinkedIn/job title/company
+  // size (§8) — must be a real, named, human-auditable source, e.g. "Signed
+  // MSA clause 4.2", "Verbal consent on call CALL_ID at 00:01:12", "Opt-in
+  // form submission #123".
+  source           String?            @db.Text
+  capturedAt       DateTime?
+  capturedByUserId String?
+  // Free-text jurisdiction/purpose — this app has no jurisdiction rule
+  // engine; these are recorded for a human/legal reviewer, never used to
+  // auto-approve a call.
+  jurisdiction     String?
+  purpose          String?
+  evidence         String?            @db.Text
+
+  recordingConsent VoiceRecordingConsent @default(UNKNOWN)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact        Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  capturedByUser User?        @relation(fields: [capturedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+}
+
+enum CallDirection {
+  OUTBOUND
+  INBOUND
+}
+
+// §6 — only ELIGIBLE may proceed to call execution.
+enum CallEligibilityStatus {
+  ELIGIBLE
+  CONSENT_REQUIRED
+  DO_NOT_CALL
+  OPTED_OUT
+  INVALID_NUMBER
+  OUTSIDE_ALLOWED_TIME
+  PROVIDER_RESTRICTED
+  JURISDICTION_RESTRICTED
+  UNKNOWN
+}
+
+// §13 — real, provider-confirmed states only.
+enum CallStatus {
+  CALL_REQUESTED
+  RINGING
+  ANSWERED
+  NO_ANSWER
+  BUSY
+  VOICEMAIL
+  FAILED
+  COMPLETED
+  CANCELLED
+}
+
+enum CallOutcome {
+  INTERESTED
+  NOT_INTERESTED
+  CALLBACK
+  MEETING_REQUESTED
+  QUALIFIED
+  DISQUALIFIED
+  NO_ANSWER
+  BUSY
+  VOICEMAIL
+  UNKNOWN
+}
+
+// §14 — outcome provenance is always recorded, so "QUALIFIED" can never be
+// silently attributed to "the AI sounded positive."
+enum CallOutcomeSetBy {
+  PROVIDER_STATUS
+  HUMAN
+  AI_SUGGESTED
+}
+
+enum CallTranscriptStatus {
+  TRANSCRIPT_AVAILABLE
+  TRANSCRIPT_NOT_AVAILABLE
+  TRANSCRIPT_NOT_PERMITTED
+  TRANSCRIPT_FAILED
+}
+
+/**
+ * Phase 10 (AI Voice Sales Engine) — one real row per real call attempt.
+ * `status`/`recordingStatus`/`transcriptStatus` only ever change on a real
+ * provider event (webhook) or an explicit human action — never assumed.
+ * `eligibilityStatus`/`consentStatus`/`recordingConsentStatus` are a
+ * SNAPSHOT of the real eligibility/consent check performed immediately
+ * before this call was placed (voice-eligibility.ts) — kept here so a
+ * later consent change never rewrites the historical record of what was
+ * actually true at call time.
+ */
+model Call {
+  id             String  @id @default(cuid())
+  organizationId String
+  companyId      String?
+  contactId      String
+  leadId         String?
+  opportunityId  String?
+  campaignId     String?
+
+  provider       String  @default("TWILIO")
+  providerCallId String? @unique
+
+  direction CallDirection
+
+  eligibilityStatus      CallEligibilityStatus
+  consentStatus          VoiceConsentStatus
+  recordingConsentStatus VoiceRecordingConsent
+  // Set only once the real disclosure statement was actually played/sent
+  // to the recipient (§11) — never assumed true.
+  aiDisclosureGiven      Boolean               @default(false)
+
+  status       CallStatus        @default(CALL_REQUESTED)
+  outcome      CallOutcome?
+  outcomeSetBy CallOutcomeSetBy?
+
+  startedAt       DateTime?
+  answeredAt      DateTime?
+  endedAt         DateTime?
+  durationSeconds Int?
+
+  recordingStatus      VoiceRecordingConsent @default(UNKNOWN)
+  // Provider REFERENCE only — the actual audio stays with the provider,
+  // never duplicated into this app's own storage (§16: "prefer storing a
+  // secure reference ... rather than unnecessarily duplicating sensitive
+  // data").
+  recordingProviderRef String?
+
+  transcriptStatus  CallTranscriptStatus @default(TRANSCRIPT_NOT_AVAILABLE)
+  // The real Reply row (channel: VOICE) carrying the actual transcript
+  // text, once available — plain scalar id (not a relation) since it's
+  // looked up directly, never joined/grouped-by, mirroring
+  // RevenueAttribution's leadId/opportunityId convention (Phase 7).
+  transcriptReplyId String?
+
+  cost     Float?
+  currency String?
+
+  failedReason String? @db.Text
+  cancelReason String? @db.Text
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([contactId])
+  @@index([companyId])
+  @@index([campaignId])
+}
+
+// ===== Phase 6 (AI Conversation Intelligence) =====
+// A "thread" in this codebase is the real, already-existing grouping by
+// (organizationId, contactId) — the same grouping the Inbox UI
+// (/dashboard/outreach/inbox/[contactId]) and getContactTimeline already
+// use. There is no separate Thread/Message model anywhere (confirmed
+// before adding this), so `contactId` IS the thread identity — never a
+// second thread concept.
+//
+// Append-only history (one row per analysis run), mirroring this session's
+// own established precedent (IntentScoreHistory, EnrichmentRun,
+// PredictionCalibration) for "needs real versioning, never overwritten" —
+// the latest row per contactId (by generatedAt) is the current
+// intelligence; older rows remain queryable, satisfying spec §21.
+enum ConversationIntent {
+  INFORMATION_REQUEST
+  INTERESTED
+  EVALUATING
+  REQUEST_FOR_PROPOSAL
+  REQUEST_FOR_DEMO
+  NEGOTIATING
+  READY_TO_BUY
+  NOT_INTERESTED
+  FOLLOW_UP
+  SUPPORT
+  GENERAL
+  UNKNOWN
+}
+
+enum ConversationSentiment {
+  POSITIVE
+  NEUTRAL
+  MIXED
+  NEGATIVE
+  UNKNOWN
+}
+
+enum ConversationUrgency {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  UNKNOWN
+}
+
+enum BudgetSignalType {
+  EXPLICIT_BUDGET
+  BUDGET_RANGE
+  BUDGET_CONCERN
+  PRICE_SENSITIVITY
+  NO_BUDGET_MENTION
+  UNKNOWN
+}
+
+enum DecisionMakerSignalType {
+  KNOWN_DECISION_MAKER
+  POTENTIAL_DECISION_MAKER
+  NOT_IDENTIFIED
+}
+
+enum ConversationAnalysisStatus {
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+model ConversationIntelligence {
+  id             String  @id @default(cuid())
+  organizationId String
+  companyId      String?
+  contactId      String
+  // Alias of contactId, per the spec's own field name — kept as a real
+  // column (not just a doc comment) so API responses can use the exact
+  // vocabulary the spec asked for without the reader needing to know the
+  // "contactId = threadId" mapping.
+  threadId       String
+
+  intent                 ConversationIntent    @default(UNKNOWN)
+  sentiment              ConversationSentiment @default(UNKNOWN)
+  urgency                ConversationUrgency   @default(UNKNOWN)
+  // Evidence-only — NEVER auto-overwrites the real IntentScore.buyingStage
+  // (Phase 2). Nullable: absent when the transcript gives no real evidence.
+  detectedBuyingStage    BuyingStage?
+  detectedBuyingStageWhy String?               @db.Text
+
+  // Each Json array element: { value/type, description, sourceMessageId,
+  // sourceQuote, confidence: HIGH|MEDIUM|LOW, classification:
+  // CONFIRMED|INFERRED|UNKNOWN } — requirements additionally carry
+  // classification CLIENT_STATED_REQUIREMENT vs AI_RECOMMENDATION.
+  objections         Json @default("[]")
+  requirements       Json @default("[]")
+  questions          Json @default("[]")
+  requestedServices  Json @default("[]")
+  competitorMentions Json @default("[]")
+
+  budgetSignal       BudgetSignalType @default(UNKNOWN)
+  budgetSignalDetail String?          @db.Text
+
+  timelineSignalRaw        String? @db.Text
+  timelineSignalNormalized String?
+  timelineSourceMessageId  String?
+
+  decisionMakerSignal    DecisionMakerSignalType @default(NOT_IDENTIFIED)
+  decisionMakerSignalWhy String?                 @db.Text
+
+  // { clientRequestedAction, internalAction, aiRecommendedAction } — each
+  // separately labeled, never merged into one ambiguous "next action".
+  nextAction Json @default("{}")
+
+  // The spec §20 structured summary — { status, clientNeed, objection,
+  // timeline, requestedService, nextAction, evidence: string[] }.
+  summary Json @default("{}")
+
+  confidence String                     @default("UNKNOWN") // HIGH | MEDIUM | LOW | UNKNOWN — explainable via the evidence in each field above, never a bare number
+  status     ConversationAnalysisStatus @default(COMPLETED)
+  error      String?                    @db.Text
+
+  // Cost control (§31): the exact set of EmailDraft/Reply ids this run
+  // actually analyzed — the next analysis compares the thread's CURRENT
+  // message-id set against this to detect "nothing new since last run"
+  // without needing a separate hash column.
+  analyzedMessageIds String[] @default([])
+
+  // Human override (§38) — never erases the AI original (this whole row
+  // stays exactly as generated); an override is a NEW row that copies the
+  // prior fields and records what a human changed and why.
+  overriddenField    String?
+  overriddenValue    String?
+  overriddenByUserId String?
+  overrideReason     String? @db.Text
+
+  model         String?
+  provider      String?
+  promptVersion String   @default("v1")
+  generatedAt   DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  company      Company?     @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([contactId, generatedAt])
+  @@index([companyId])
 }
 
 enum RateNegotiationStatus {
@@ -5042,23 +6075,23 @@ model RateNegotiation {
 
   // Real excerpt of the client's own reply that triggered this — never
   // paraphrased into something the client didn't actually say.
-  clientMessage String @db.Text
+  clientMessage           String @db.Text
   // What real, already-persisted context (LeadOpportunity/CompanyIntelligence/
   // CompanyEvidence) the AI recommendation below was actually grounded in —
   // an honest "no real scope information yet" when there isn't any, never
   // invented project detail.
-  scopeSummary  String @db.Text
+  scopeSummary            String @db.Text
   // In INR. Null when there's genuinely not enough real scope context to
   // recommend anything beyond KVL's own floor (see kvl-service-catalog.ts) —
   // never a guessed number standing in for real analysis.
-  recommendedRateINR     Int?
+  recommendedRateINR      Int?
   recommendationReasoning String @db.Text
 
-  status           RateNegotiationStatus @default(AWAITING_OWNER)
-  ownerEmailSentAt DateTime?
+  status             RateNegotiationStatus @default(AWAITING_OWNER)
+  ownerEmailSentAt   DateTime?
   // Real, unedited body text of the owner's own reply email — the actual
   // final word on rate, never AI-paraphrased.
-  ownerReplyContent  String?   @db.Text
+  ownerReplyContent  String?               @db.Text
   ownerRespondedAt   DateTime?
   clientReplyDraftId String?
   outreachMeetingId  String?
@@ -5781,6 +6814,11 @@ enum IntegrationProviderKey {
   DISCORD
   TELEGRAM
   TWILIO
+  // Phase 9 (LinkedIn Sales Intelligence) — "Sign In with LinkedIn using
+  // OpenID Connect" only (openid/profile/email); see
+  // src/lib/integrations/providers/linkedin.ts's doc comment for exactly
+  // what this app is and isn't approved for.
+  LINKEDIN
   // Storage
   GOOGLE_DRIVE
   DROPBOX
@@ -6050,6 +7088,17 @@ enum AlertType {
   SUPPORT_SLA_BREACH
   // Phase 19: HR Agent — a real LeaveRequest sitting PENDING too long.
   LATE_LEAVE_APPROVAL
+  // Phase 4 (Email Deliverability & Sender Health Engine) — a SendingIdentity
+  // crossed a configured bounce/complaint/provider-error threshold.
+  EMAIL_DELIVERABILITY_RISK
+  // Phase 12 (Predictive Revenue Engine) — a single open Deal's computed
+  // risk (src/lib/forecast/deal-risk.ts) reached CRITICAL. relatedEntityId
+  // = the Deal id.
+  DEAL_RISK_CRITICAL
+  // Phase 12 — the org's weighted open pipeline is concentrated in too few
+  // deals (src/lib/forecast/pipeline-risk.ts). Org-level: relatedEntityId
+  // is null.
+  PIPELINE_CONCENTRATION_RISK
 }
 
 enum AlertStatus {
@@ -7080,9 +8129,23 @@ model LeadOpportunity {
   priority                  OpportunityPriority?
   priorityReasoning         String?              @db.Text
 
+  // Priority Queue triage — trend arrow needs the score from before the most
+  // recent recompute (set inside computeOpportunityScore, see
+  // opportunity-priority.ts); ownerUserId/snoozedUntil back the "Assign to
+  // me" and "Snooze" inline actions on that same page.
+  previousOpportunityScore Int?
+  ownerUserId              String?
+  snoozedUntil             DateTime?
+
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  owner   User?   @relation("OpportunityOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  // Phase 13: the real Deal(s) this opportunity was converted into. Many-valued
+  // for the same "never fail a write over an edge case" reasoning as
+  // Lead.convertedDeals — the UI enforces "convert once" via isTerminal().
+  convertedDeals Deal[]
 
   @@index([companyId, createdAt])
+  @@index([ownerUserId])
 }
 
 enum OpportunityStatus {
@@ -8026,4 +9089,518 @@ model ChangeRequest {
   updatedAt DateTime @updatedAt
 
   @@index([status, riskLevel])
+}
+
+// ============================= Phase 11: Closed-Loop Revenue Learning Engine =============================
+//
+// Reuses, never duplicates: RevenueAttribution (src/lib/analytics/revenue-attribution.ts) is
+// still the one real funnel-evidence system — these models observe and learn from it, they do
+// not replace it. IntentScore/opportunity-priority.ts scoring formulas are read, never rewritten
+// here. See src/lib/learning/ for the engine itself and PredictionCalibration (Phase 3) for the
+// pre-existing "refuse below minimum sample size" precedent this follows.
+
+enum LearningOutcome {
+  FOUND
+  QUALIFIED
+  CONTACTED
+  REPLIED
+  MEETING
+  PROPOSAL
+  WON
+  LOST
+  NO_RESPONSE
+  DISQUALIFIED
+  UNKNOWN
+}
+
+enum LearningConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum LearningSampleClassification {
+  INSUFFICIENT_DATA
+  LOW_SAMPLE
+  EMERGING
+  OBSERVED
+  STRONG_OBSERVATION
+}
+
+enum LearningPatternStatus {
+  EMERGING
+  ACTIVE
+  WEAKENING
+  STALE
+  RETIRED
+}
+
+enum LearningPatternType {
+  WINNING_PATTERN
+  LOSING_PATTERN
+  SIGNAL
+  MESSAGE_ANGLE
+  SERVICE
+  CHANNEL
+  DECISION_MAKER
+  HIGH_VALUE
+  LONG_SALES_CYCLE
+  SHORT_SALES_CYCLE
+  OBJECTION
+}
+
+enum LearningRecommendationCategory {
+  PRIORITY
+  INTENT
+  OUTREACH
+  RESEARCH
+  SERVICE_MATCHING
+  FOLLOW_UP
+  OTHER
+}
+
+enum LearningRecommendationStatus {
+  PROPOSED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  IMPLEMENTED
+  ROLLED_BACK
+}
+
+enum LearningHealthStatus {
+  HEALTHY
+  LIMITED_DATA
+  STALE
+  INSUFFICIENT_DATA
+  ERROR
+}
+
+// One row per company/opportunity funnel journey, materialized (never
+// hand-entered) from real source records by
+// src/lib/learning/observations.ts. This is the "preserve the original
+// source facts" layer (§3) — patterns are computed FROM these rows, never
+// directly from live production tables, so a pattern recompute is
+// reproducible from a fixed, versioned snapshot.
+model LearningObservation {
+  id             String @id @default(cuid())
+  organizationId String
+
+  // Scalar-only cross-domain links (RevenueAttribution's own convention for
+  // its secondary ids) — deliberately NOT Prisma relations, so this model
+  // never requires a reverse-array field on Contact, DecisionMaker,
+  // LeadOpportunity, Deal, Proposal, OutreachMeeting, Campaign or Sequence.
+  // Real records only; a missing stage's id is simply null, never invented.
+  companyId            String?
+  contactId            String?
+  decisionMakerId      String?
+  leadOpportunityId    String?
+  dealId               String?
+  proposalId           String?
+  meetingId            String?
+  replyId              String?
+  campaignId           String?
+  sequenceId           String?
+  revenueAttributionId String?
+
+  channel      DraftChannel?
+  service      String?
+  country      String?
+  industry     String?
+  companySize  Int?
+  technologies String[]      @default([])
+
+  // Pulled from IntentScoreHistory as of `predictionTimestamp`, never the
+  // current/latest IntentScore row — the data-leakage guard (§36): a score
+  // computed AFTER the outcome was already known must never be used as if
+  // it were available at prediction time.
+  intentScore   Float?
+  intentBand    String?
+  intentSignals Json    @default("[]")
+
+  decisionMakerRole String?
+  // Best-effort keyword bucket of LeadOpportunity.salesAngle — NOT a
+  // controlled vocabulary. See src/lib/learning/message-angles.ts.
+  messageAngle      String?
+
+  dealSize       Float?
+  salesCycleDays Int?
+
+  // Copied verbatim from ConversationIntelligence.objections, including its
+  // existing CONFIRMED | INFERRED | UNKNOWN classification per entry —
+  // never collapsed into a single confirmed/not-confirmed flag (§18).
+  objections Json @default("[]")
+
+  leadSource CompanySource?
+
+  outcome LearningOutcome @default(UNKNOWN)
+  revenue Float?
+
+  // Real historical timestamps only — { foundAt, qualifiedAt, contactedAt,
+  // repliedAt, meetingAt, proposalAt, wonAt, lostAt, revenueAt }. A stage
+  // with no real record is simply omitted, never inferred (§4).
+  stageTimestamps Json @default("{}")
+
+  modelVersion  String?
+  promptVersion String?
+  aiProvider    String?
+
+  // When the features above were captured vs when the eventual outcome was
+  // known — enforced predictionTimestamp <= actualOutcomeTimestamp by
+  // buildObservationsForOrganization (src/lib/learning/observations.ts),
+  // never by a DB constraint alone (§36).
+  predictionTimestamp    DateTime?
+  actualOutcomeTimestamp DateTime?
+
+  datasetVersion  String @default("v1")
+  analysisVersion String @default("v1")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, companyId, leadOpportunityId])
+  @@index([organizationId, outcome])
+  @@index([organizationId, createdAt])
+  @@index([companyId])
+  @@index([leadOpportunityId])
+}
+
+// A discovered cohort pattern (§17). Never claims causation (`causality`
+// defaults to and is displayed as "NOT_ESTABLISHED") and never claims
+// statistical strength beyond what `sampleClassification` — computed
+// deterministically from real counts, never an LLM guess — actually
+// supports.
+model LearningPattern {
+  id             String @id @default(cuid())
+  organizationId String
+
+  patternType LearningPatternType
+  name        String
+  description String              @db.Text
+
+  // [{ dimension, value }] — the exact cohort conditions this pattern was
+  // computed against.
+  conditions Json @default("[]")
+  // Free-form cohort dimension snapshot (industry/country/companySize/
+  // service/channel/campaignId/decisionMakerRole/dealSizeBand/leadSource/
+  // intentBand) — kept as Json rather than 10 nullable columns since not
+  // every pattern type populates every dimension (§12).
+  cohort     Json @default("{}")
+
+  sampleSize       Int
+  positiveOutcomes Int
+  negativeOutcomes Int
+  conversionRate   Float?
+
+  revenue              Float?
+  avgDealSize          Float?
+  medianDealSize       Float?
+  avgSalesCycleDays    Float?
+  medianSalesCycleDays Float?
+
+  timePeriodStart DateTime
+  timePeriodEnd   DateTime
+
+  confidence        LearningConfidence
+  // { sampleSize, outcomeConsistency, timeStability, dataCompleteness,
+  // crossCohortStability } — every factor a real computed number from
+  // src/lib/learning/patterns.ts, never LLM-generated (§10).
+  confidenceFactors Json               @default("{}")
+
+  sampleClassification LearningSampleClassification
+  minSampleThreshold   Int
+
+  // Always "NOT_ESTABLISHED" today — kept as a string (not hardcoded at
+  // every call site) so a real future controlled experiment could set a
+  // different value without a schema migration (§15).
+  causality String @default("NOT_ESTABLISHED")
+
+  evidenceIds String[] @default([])
+
+  status          LearningPatternStatus @default(EMERGING)
+  firstDetectedAt DateTime              @default(now())
+  lastConfirmedAt DateTime?
+  lastObservedAt  DateTime?
+  trend           String?
+
+  computedByRunId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, patternType])
+  @@index([organizationId, status])
+  @@index([organizationId, sampleClassification])
+}
+
+// The governed recommendation queue (§33). Every row requires explicit
+// human review — the engine only ever writes PROPOSED here, never
+// APPROVED/IMPLEMENTED itself (§32).
+model LearningRecommendation {
+  id             String @id @default(cuid())
+  organizationId String
+
+  category        LearningRecommendationCategory
+  title           String
+  currentRule     String                         @db.Text
+  suggestedChange String                         @db.Text
+  reasoning       String                         @db.Text
+
+  evidencePatternIds String[]           @default([])
+  sampleSize         Int
+  confidence         LearningConfidence
+
+  expectedImpact String @db.Text
+  risk           String @db.Text
+  affectedSystem String
+
+  // Always true — the learning engine never auto-applies a critical rule
+  // change (§32). Kept as a real column (not implied) so a future review UI
+  // can filter/sort on it honestly.
+  approvalRequired Boolean @default(true)
+
+  status LearningRecommendationStatus @default(PROPOSED)
+
+  reviewedByUserId      String?
+  reviewedAt            DateTime?
+  approvedAt            DateTime?
+  implementationVersion String?
+  rejectionReason       String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([organizationId, category])
+}
+
+// Point-in-time shadow-mode comparison only (§34) — deliberately NOT an
+// automatic time-series tracker (that needs weeks of accumulating real
+// outcomes to mean anything on this org's current data volume; see the
+// Phase 11 final report for this documented deferral). Never written back
+// to LeadOpportunity.opportunityScore.
+model LearningShadowScore {
+  id             String @id @default(cuid())
+  organizationId String
+
+  leadOpportunityId String
+
+  productionScore Int
+  // Equals productionScore (scoreDiff 0) whenever no OBSERVED/
+  // STRONG_OBSERVATION pattern applies to this opportunity's cohort — never
+  // a fabricated alternative formula.
+  shadowScore     Int
+  scoreDiff       Int
+
+  basisPatternIds String[] @default([])
+
+  computedAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, leadOpportunityId])
+  @@index([organizationId, computedAt])
+}
+
+// One row per organization — the Learning Health status (§48) and the
+// incremental-processing watermark (§50) runLearningEngine reads/writes.
+model LearningEngineState {
+  id             String @id @default(cuid())
+  organizationId String @unique
+
+  lastProcessedAt DateTime?
+  datasetVersion  String    @default("v1")
+  analysisVersion String    @default("v1")
+  lastRunId       String?
+
+  status LearningHealthStatus @default(INSUFFICIENT_DATA)
+
+  totalObservations        Int @default(0)
+  verifiedOutcomeCount     Int @default(0)
+  unknownOutcomeCount      Int @default(0)
+  patternsDetected         Int @default(0)
+  patternsSufficientData   Int @default(0)
+  patternsInsufficientData Int @default(0)
+  recommendationsPending   Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+// ============================= Phase 12: Predictive Revenue Engine =============================
+//
+// Reuses, never duplicates: src/lib/revenue/forecast.ts (getRevenueForecast/getCashFlowProjection)
+// and src/app/dashboard/crm/_lib/forecast.ts (getSalesForecast) remain the deterministic
+// open-pipeline/sales-velocity/cash-flow source of truth — src/lib/forecast/ calls them as
+// building blocks. Phase 11's LearningPattern is read (never copied) as an optional cohort
+// signal. PredictionCalibration (Phase 3) stays Proposal-win-probability-specific;
+// ForecastCalibration below is the same pattern applied to Deal probability, kept distinct via
+// `subject` rather than overloading that table's meaning.
+
+enum PredictionType {
+  DEAL_PROBABILITY
+  EXPECTED_DEAL_VALUE
+  PIPELINE_VALUE
+  WEIGHTED_PIPELINE
+  EXPECTED_REVENUE
+  EXPECTED_DEALS
+  SALES_VELOCITY
+  TIME_TO_CLOSE
+  DEAL_RISK
+  PIPELINE_RISK
+  MONTHLY_REVENUE_FORECAST
+  QUARTERLY_REVENUE_FORECAST
+  REVENUE_RANGE
+  DEAL_CLOSE_DATE
+  PIPELINE_COVERAGE
+}
+
+enum PredictionStatus {
+  ACTIVE
+  SUPERSEDED
+  EVALUATED
+}
+
+// The one generic, versioned prediction/forecast table (§3/§4). A new
+// snapshot for the same (organizationId, entityType, entityId,
+// predictionType, forecastPeriod) marks every prior matching row
+// SUPERSEDED (src/lib/forecast/snapshot.ts) — never deleted, never
+// overwritten in place — which alone satisfies "never overwrite previous
+// forecasts, store snapshots, compare how forecasts evolved" (§27/§50).
+model PredictionSnapshot {
+  id             String @id @default(cuid())
+  organizationId String
+
+  predictionType PredictionType
+  // "DEAL" (entityId = Deal.id) or "ORGANIZATION" (entityId = organizationId
+  // itself, for org-wide pipeline/revenue/forecast predictions) — no other
+  // entity types exist today; extend here, never with a second table.
+  entityType     String
+  entityId       String
+
+  // The headline number — currency amount (deal value/pipeline/revenue),
+  // days (time-to-close), or count (expected deals). Null for RISK types,
+  // whose real payload lives in `details` (riskLevel/reasons/evidence).
+  predictionValue       Float?
+  // 0-1. Set for DEAL_PROBABILITY and any EXPECTED_* type derived from a
+  // probability.
+  predictionProbability Float?
+
+  // Reuses Phase 11's LearningConfidence (LOW/MEDIUM/HIGH) — no duplicate enum.
+  confidence        LearningConfidence
+  // { sampleSize, dataCompleteness, cohortSimilarity, calibrationQuality,
+  // forecastHorizonPenalty, ... } — every factor a real computed number,
+  // same discipline as Phase 11's ConfidenceFactors (§14).
+  confidenceFactors Json               @default("{}")
+
+  predictionDate      DateTime @default(now())
+  // e.g. "2026-09" or "2026-Q4" — null for deal-level (non-period) predictions.
+  forecastPeriod      String?
+  // The real timestamp of the last data point used — enforced <=
+  // predictionDate by the code that writes this row (data-leakage guard, §18).
+  dataCutoffTimestamp DateTime
+
+  // Human-readable method description (e.g. "Historical win rate baseline +
+  // LearningPattern cohort adjustment") — never just a version number with
+  // no explanation (§15).
+  modelMethod     String @db.Text
+  modelVersion    String @default("v1")
+  featureVersion  String @default("v1")
+  learningVersion String @default("v1")
+
+  status PredictionStatus @default(ACTIVE)
+
+  // Populated once the real outcome is known (§28/§29) — the ORIGINAL
+  // prediction fields above are never altered when this is filled in.
+  actualValue   Float?
+  actualOutcome String?
+  // { absoluteError, percentageError, withinRange } — null until actualValue is set.
+  accuracy      Json?
+
+  currency   String?
+  lowerBound Float?
+  upperBound Float?
+
+  explanation String?  @db.Text
+  // Real record ids this prediction is traceable to — Deal ids for an
+  // org-level pipeline prediction, LearningPattern ids for a cohort
+  // adjustment, etc. Never fabricated.
+  evidenceIds String[] @default([])
+
+  runId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, entityType, entityId, predictionType, status])
+  @@index([organizationId, predictionType, forecastPeriod, status])
+  @@index([organizationId, predictionDate])
+}
+
+// Real Deal stage-transition log — Deal itself only stores its CURRENT
+// stage, so this is what makes genuine historical stage-conversion
+// analysis (§6) possible, starting from when this ships (never
+// retroactively fabricated for transitions that happened before this
+// model existed — src/lib/forecast/deal-probability.ts reports
+// INSUFFICIENT_HISTORICAL_DATA for that signal until enough real rows
+// accumulate here).
+model DealStageHistory {
+  id             String @id @default(cuid())
+  organizationId String
+  dealId         String
+
+  fromStageId   String?
+  fromStageName String?
+  toStageId     String
+  toStageName   String
+
+  changedAt       DateTime @default(now())
+  changedByUserId String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, dealId, changedAt])
+  @@index([organizationId, toStageName])
+}
+
+// Same bucketed-calibration pattern as PredictionCalibration
+// (src/lib/ai/prediction-calibration.ts) — hard minimum-sample gate,
+// append-only history — applied to Deal probability instead of Proposal
+// win-probability. Kept as its own model (not a reuse of
+// PredictionCalibration) so the two real, distinct subjects are never
+// conflated in one table.
+model ForecastCalibration {
+  id             String @id @default(cuid())
+  organizationId String
+
+  // Always "DEAL_PROBABILITY" today — kept as a real column (not hardcoded
+  // everywhere) so a second calibrated subject could be added later without
+  // a migration.
+  subject String @default("DEAL_PROBABILITY")
+
+  sampleSize Int
+  // CalibrationBand[] — { label, min, max, sampleSize, wonCount,
+  // actualWinRate, avgPredictedProbability }, zero-sample bands kept, never
+  // hidden.
+  bandsJson  Json
+  // OVERCONFIDENT | UNDERCONFIDENT | WELL_CALIBRATED | INSUFFICIENT_DATA —
+  // computed from bandsJson, never asserted from a tiny sample (§30).
+  verdict    String
+  summary    String @db.Text
+
+  computedAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, subject, computedAt])
 }

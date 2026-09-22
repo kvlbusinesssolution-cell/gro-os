@@ -58,6 +58,10 @@ function actionForDraftStatus(status: DraftStatus): string {
       return "Draft was rejected — revise it or start new outreach";
     case "BOUNCED":
       return "Email bounced — verify the contact's email address";
+    case "DELIVERED":
+      return "Message delivered — waiting for client reply";
+    case "READ":
+      return "Message read — waiting for client reply";
     default: {
       const exhaustive: never = status;
       throw new Error(`suggestNextActionForCompany: unhandled DraftStatus ${String(exhaustive)}`);

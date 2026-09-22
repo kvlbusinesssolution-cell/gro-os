@@ -3,7 +3,7 @@ import { LogOut } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Button } from "@/components/ui/button";
-import { LogoMark } from "@/components/brand/logo-mark";
+import { Logo } from "@/components/brand/logo";
 import { signOutAction } from "@/app/dashboard/actions";
 import { AdminSidebar } from "./_components/admin-sidebar";
 
@@ -27,9 +27,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
         <Container className="flex h-16 items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <Link href="/admin" className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gradient-brand">
-              <LogoMark size={22} />
-              KVL
+            <Link href="/admin" className="flex items-center">
+              <Logo size={40} />
             </Link>
             <span className="hidden h-5 w-px bg-border sm:block" />
             <span className="hidden text-sm font-medium text-muted-foreground sm:inline">Platform Admin</span>

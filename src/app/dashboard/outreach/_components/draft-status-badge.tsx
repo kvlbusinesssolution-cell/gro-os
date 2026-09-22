@@ -10,6 +10,9 @@ const STATUS_LABEL: Record<DraftStatus, string> = {
   FAILED: "Failed",
   REJECTED: "Rejected",
   BOUNCED: "Bounced",
+  // Phase 8 (WhatsApp) — only ever set from a real provider status-callback event.
+  DELIVERED: "Delivered",
+  READ: "Read",
 };
 
 const STATUS_VARIANT: Record<DraftStatus, "outline" | "secondary" | "accent" | "default"> = {
@@ -21,6 +24,8 @@ const STATUS_VARIANT: Record<DraftStatus, "outline" | "secondary" | "accent" | "
   FAILED: "outline",
   REJECTED: "outline",
   BOUNCED: "outline",
+  DELIVERED: "default",
+  READ: "accent",
 };
 
 const STATUS_CLASS: Partial<Record<DraftStatus, string>> = {
@@ -28,6 +33,7 @@ const STATUS_CLASS: Partial<Record<DraftStatus, string>> = {
   FAILED: "border-destructive/30 bg-destructive/10 text-destructive",
   REJECTED: "border-destructive/30 bg-destructive/10 text-destructive",
   BOUNCED: "border-destructive/30 bg-destructive/10 text-destructive",
+  DELIVERED: "border-transparent bg-primary text-primary-foreground",
 };
 
 /** Never blurs the Draft/Pending/Approved/Queued/Sent/Failed distinction — every status gets its own explicit label. */

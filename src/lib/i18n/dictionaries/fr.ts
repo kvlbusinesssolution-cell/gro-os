@@ -9,6 +9,8 @@ export const fr: Dictionary = {
   "nav.opportunities": "Opportunités IA",
   "nav.priorityQueue": "File d'Attente Prioritaire IA",
   "nav.revenueCommandCenter": "Centre de Commande des Revenus",
+  "nav.learning": "Apprentissage des Revenus",
+  "nav.forecast": "Revenus Prédictifs",
   "nav.clients": "Clients",
   "nav.promptLibrary": "Bibliothèque de Prompts",
   "nav.hr": "RH",

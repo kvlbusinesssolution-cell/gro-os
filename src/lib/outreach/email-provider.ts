@@ -19,9 +19,12 @@
  *     string convention as sendEmail()'s existing EMAIL_SERVER contract.
  */
 
+import { prisma } from "@/lib/prisma";
 import { getConnection, getFreshAccessToken } from "@/lib/integrations/connection-store";
 import { recordAPIUsage } from "@/lib/api-usage";
 import { getWhiteLabelEmailFrom } from "@/lib/white-label/resolve-brand";
+import { checkSuppression } from "./suppression";
+import { getOrCreateSendingIdentity, checkRateLimit, recordSendAttempt, applyRateLimitCooldown } from "./sending-identity";
 
 export interface OutreachEmailInput {
   to: string;
@@ -43,11 +46,26 @@ function nonEmpty(emails: string[] | undefined): string[] | undefined {
 
 export type OutreachEmailResult =
   | { ok: true; providerMessageId?: string }
-  | { ok: false; errorKind: "not_configured" | "failed"; error: string };
+  | {
+      ok: false;
+      // Phase 4: "suppressed" and "rate_limited" are new, real outcomes this
+      // safety layer can now return WITHOUT ever calling a provider API —
+      // distinct from "failed" (a provider genuinely rejected/errored) so
+      // callers can tell "we chose not to send" from "we tried and it broke".
+      errorKind: "not_configured" | "failed" | "suppressed" | "rate_limited";
+      error: string;
+      // Populated only when a real provider response is known to have
+      // returned it (Resend) — null/undefined everywhere else, never guessed.
+      statusCode?: number;
+      retryAfterSeconds?: number | null;
+    };
 
 export function isEmailSendingConfigured(): boolean {
   return Boolean(process.env.RESEND_API_KEY || process.env.EMAIL_SERVER);
 }
+
+// Phase 4 §11 — documented, configurable duplicate-send protection window.
+const DUPLICATE_WINDOW_MS = 5 * 60_000;
 
 async function sendViaResend(input: OutreachEmailInput, emailFrom: { name: string; address: string } | null): Promise<OutreachEmailResult> {
   try {
@@ -70,7 +88,14 @@ async function sendViaResend(input: OutreachEmailInput, emailFrom: { name: strin
     });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      return { ok: false, errorKind: "failed", error: `Resend rejected the send (HTTP ${response.status}): ${body.slice(0, 200)}` };
+      const retryAfterHeader = response.headers.get("retry-after");
+      return {
+        ok: false,
+        errorKind: "failed",
+        error: `Resend rejected the send (HTTP ${response.status}): ${body.slice(0, 200)}`,
+        statusCode: response.status,
+        retryAfterSeconds: retryAfterHeader ? Number(retryAfterHeader) || null : null,
+      };
     }
     const body = (await response.json().catch(() => null)) as { id?: string } | null;
     return { ok: true, providerMessageId: typeof body?.id === "string" ? body.id : undefined };
@@ -210,6 +235,36 @@ async function sendViaOutlook(
  * failure honestly instead of silently retrying through the list.
  */
 export async function sendOutreachEmail(organizationId: string, input: OutreachEmailInput): Promise<OutreachEmailResult> {
+  // Phase 4 (Email Deliverability & Sender Health Engine) — the single
+  // suppression choke-point, checked BEFORE every provider branch below, so
+  // Gmail/Outlook/Resend/SMTP are all covered by one edit. Fixes a real,
+  // confirmed gap: previously nothing checked bouncedAt/complainedAt at
+  // send time, and KVL's own automated outreach didn't even check
+  // UNSUBSCRIBED. This is a deliberate BLOCK, not a soft warning — a
+  // suppressed recipient must never receive outreach (rule 10).
+  const suppression = await checkSuppression(organizationId, input.to);
+  if (suppression.suppressed) {
+    return { ok: false, errorKind: "suppressed", error: suppression.detail ?? `Recipient is suppressed (${suppression.reason}).` };
+  }
+
+  // Phase 4 §11 — real, server-side duplicate-recipient protection: a
+  // second send to the same real email address within DUPLICATE_WINDOW_MS
+  // of an already-SENT one (same org) is blocked. Catches an accidental
+  // double-fire (a retried job, a race between two callers) without
+  // interfering with a legitimate later re-send (a new campaign days
+  // later, a follow-up in a sequence).
+  const recentDuplicate = await prisma.emailDraft.findFirst({
+    where: { organizationId, status: "SENT", sentAt: { gte: new Date(Date.now() - DUPLICATE_WINDOW_MS) }, contact: { email: { equals: input.to, mode: "insensitive" } } },
+    orderBy: { sentAt: "desc" },
+  });
+  if (recentDuplicate) {
+    return {
+      ok: false,
+      errorKind: "failed",
+      error: `Duplicate send blocked — an email was already sent to ${input.to} ${Math.round((Date.now() - (recentDuplicate.sentAt?.getTime() ?? 0)) / 1000)}s ago.`,
+    };
+  }
+
   const gmailToken = await getFreshAccessToken(organizationId, "GOOGLE_GMAIL");
   if (gmailToken) {
     const gmailConnection = await getConnection(organizationId, "GOOGLE_GMAIL");
@@ -224,8 +279,28 @@ export async function sendOutreachEmail(organizationId: string, input: OutreachE
 
   if (process.env.RESEND_API_KEY || process.env.EMAIL_SERVER) {
     const emailFrom = await getWhiteLabelEmailFrom(organizationId);
-    if (process.env.RESEND_API_KEY) return sendViaResend(input, emailFrom);
-    return sendViaSmtp(input, emailFrom);
+    const provider = process.env.RESEND_API_KEY ? "RESEND" : "SMTP";
+    const fromAddress = emailFrom?.address ?? process.env.EMAIL_FROM?.match(/<(.+)>/)?.[1] ?? process.env.EMAIL_FROM ?? "no-reply@kvlgrowthos.local";
+
+    // Phase 4: rate-limit / circuit-breaker gate — only for the shared
+    // Resend/SMTP infrastructure (Gmail/Outlook send from each org's own
+    // connected mailbox, a different risk profile not centrally pooled
+    // today — see the Phase 4 report's Known Limitations). Checked
+    // PRE-EMPTIVELY, before the real provider call, never relying solely
+    // on the provider itself returning a 429.
+    const identity = await getOrCreateSendingIdentity(organizationId, fromAddress, provider);
+    const rateLimit = await checkRateLimit(identity);
+    if (!rateLimit.allowed) {
+      return { ok: false, errorKind: "rate_limited", error: rateLimit.reason ?? "Sending identity is currently rate-limited." };
+    }
+
+    const result = process.env.RESEND_API_KEY ? await sendViaResend(input, emailFrom) : await sendViaSmtp(input, emailFrom);
+
+    await recordSendAttempt(identity.id, result.ok ? "sent" : "failed");
+    if (!result.ok && result.statusCode === 429) {
+      await applyRateLimitCooldown(identity.id, result.retryAfterSeconds ?? null);
+    }
+    return result;
   }
   return {
     ok: false,

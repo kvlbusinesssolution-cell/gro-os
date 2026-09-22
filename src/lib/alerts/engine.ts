@@ -15,6 +15,9 @@ import {
   evaluateResourceShortage,
   evaluateLateLeaveApproval,
   evaluateSupportSlaBreach,
+  evaluateEmailDeliverabilityRisk,
+  evaluateDealRiskCritical,
+  evaluatePipelineConcentrationRisk,
   type AlertRuleResult,
 } from "./rules";
 import { generateMitigationSuggestions } from "./mitigation";
@@ -34,6 +37,9 @@ const RULES: Record<AlertType, (organizationId: string) => Promise<AlertRuleResu
   RESOURCE_SHORTAGE: evaluateResourceShortage,
   LATE_LEAVE_APPROVAL: evaluateLateLeaveApproval,
   SUPPORT_SLA_BREACH: evaluateSupportSlaBreach,
+  EMAIL_DELIVERABILITY_RISK: evaluateEmailDeliverabilityRisk,
+  DEAL_RISK_CRITICAL: evaluateDealRiskCritical,
+  PIPELINE_CONCENTRATION_RISK: evaluatePipelineConcentrationRisk,
 };
 
 /**

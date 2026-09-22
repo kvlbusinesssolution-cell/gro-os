@@ -13,8 +13,10 @@ const OPTIONS = [
   { format: "pdf", label: "PDF report" },
 ] as const;
 
-export function ExportMenu() {
+/** Omit `companyId` for the org-wide bulk export (companies list page); pass it to scope every format to just that one company (company detail page). */
+export function ExportMenu({ companyId }: { companyId?: string } = {}) {
   const [open, setOpen] = React.useState(false);
+  const basePath = companyId ? `/api/export/companies/${companyId}` : "/api/export/companies";
 
   return (
     <div className="relative">
@@ -49,7 +51,7 @@ export function ExportMenu() {
               {OPTIONS.map((opt) => (
                 <a
                   key={opt.format}
-                  href={`/api/export/companies?format=${opt.format}`}
+                  href={`${basePath}?format=${opt.format}`}
                   onClick={() => setOpen(false)}
                   className="block rounded-lg px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-accent"
                 >

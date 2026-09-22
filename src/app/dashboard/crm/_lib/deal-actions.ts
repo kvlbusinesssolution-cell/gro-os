@@ -116,6 +116,12 @@ export async function createDeal(input: DealInput, dealStageId?: string): Promis
       metadata: { dealId: deal.id },
     });
     await logAudit({ userId, organizationId, action: "crm.deal_created", metadata: { dealId: deal.id } });
+    // Phase 12 — real stage-transition log (src/lib/forecast/deal-probability.ts
+    // reads this for historical stage-conversion analysis; starts empty, never
+    // backfilled for transitions that happened before this existed).
+    await prisma.dealStageHistory.create({
+      data: { organizationId, dealId: deal.id, toStageId: stage.id, toStageName: stage.name, changedByUserId: userId },
+    });
 
     revalidatePath("/dashboard/crm/deals");
     revalidatePath("/dashboard/crm");
@@ -229,6 +235,19 @@ export async function moveDealStage(dealId: string, targetStageId: string): Prom
     if (targetStage.name !== "Lost") data.lostReason = deal.lostReason;
 
     await prisma.deal.update({ where: { id: dealId }, data });
+
+    // Phase 12 — real stage-transition log (see createDeal's own call above).
+    await prisma.dealStageHistory.create({
+      data: {
+        organizationId: membership.organizationId,
+        dealId,
+        fromStageId: deal.dealStageId,
+        fromStageName: deal.dealStage.name,
+        toStageId: targetStageId,
+        toStageName: targetStage.name,
+        changedByUserId: userId,
+      },
+    });
 
     await logActivity({
       organizationId: membership.organizationId,

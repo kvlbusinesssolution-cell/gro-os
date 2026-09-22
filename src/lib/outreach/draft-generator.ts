@@ -48,6 +48,17 @@ export interface GenerateDraftParams {
   sequenceStepIndex?: number;
   abVariant?: string;
   abTestGroupId?: string;
+  /**
+   * Real facts about the SENDING organization (services, differentiators,
+   * proof of work, a real meeting-booking link) to ground the pitch side of
+   * the email — buildContactContext only ever covers the recipient. Optional
+   * and caller-supplied so this stays a generic, reusable field rather than
+   * hardcoding any one org's facts into this shared function; see
+   * kvl-sector-discovery-job.ts's KVL_COMPANY_PROFILE for the real KVL
+   * Business Solutions block (sourced from kvlbusinesssolutions.com, not
+   * invented).
+   */
+  extraContext?: string;
 }
 
 /**
@@ -70,26 +81,40 @@ export async function generateEmailDraft(params: GenerateDraftParams): Promise<E
   if (outreachAgent) {
     await prisma.aIAgentInstance.update({
       where: { id: outreachAgent.id },
-      data: { status: "THINKING", currentTask: `Drafting ${params.channel === "LINKEDIN" ? "a LinkedIn message" : "an email"} for ${contact.firstName}` },
+      data: {
+        status: "THINKING",
+        currentTask: `Drafting ${params.channel === "LINKEDIN" ? "a LinkedIn message" : params.channel === "WHATSAPP" ? "a WhatsApp message" : "an email"} for ${contact.firstName}`,
+      },
     });
   }
 
   const channelInstructions =
     params.channel === "LINKEDIN"
       ? "This is a LinkedIn message, not an email — do NOT include a subject line. Keep it under 300 characters, conversational, no email-style greeting/signature block."
-      : // A real production bug, confirmed via an actual sent email: the model
-        // would sometimes end with a bare "Best regards," and stop, with no
-        // name after it — an incomplete-looking sign-off. Nobody's real name
-        // is known here (never invent one), but the real company name is —
-        // require the body to close with it every time.
-        "This is a real cold email. Include a short, specific subject line (never generic like 'Quick question'). The body MUST end with a complete sign-off — never leave a closing line like \"Best regards,\" dangling with nothing after it. Sign off with the real company name \"KVL Business Solutions\" (e.g. \"Best regards,\\nKVL Business Solutions\") — never invent a specific person's name, since no individual sender name is provided in this context.";
+      : params.channel === "WHATSAPP"
+        ? // §20/§21 of the WhatsApp Business Outreach spec: a WhatsApp message
+          // reads as a short, real conversational text, not an email —
+          // never a subject line, never an email-style greeting/signature
+          // block, never inventing a commitment (price/date/guarantee) not
+          // already present in the grounding context.
+          "This is a real WhatsApp Business message, not an email — do NOT include a subject line. Keep it under 400 characters, short and conversational like a real text message, no email-style greeting (\"Dear...\") or signature block. Never invent a price, discount, delivery date, guarantee, or commitment not already present in the context below — if something isn't covered, write a neutral line inviting the recipient to share more, rather than guessing."
+        : // A real production bug, confirmed via an actual sent email: the model
+          // would sometimes end with a bare "Best regards," and stop, with no
+          // name after it — an incomplete-looking sign-off. Nobody's real name
+          // is known here (never invent one), but the real company name is —
+          // require the body to close with it every time.
+          "This is a real cold email. Include a short, specific subject line (never generic like 'Quick question'). The body MUST end with a complete sign-off — never leave a closing line like \"Best regards,\" dangling with nothing after it. Sign off with the real company name \"KVL Business Solutions\" (e.g. \"Best regards,\\nKVL Business Solutions\") — never invent a specific person's name, since no individual sender name is provided in this context.";
 
   try {
     const result = await generateStructured({
       system: `${persona.systemPrompt}\n\nWrite ${PURPOSE_LABEL[params.purpose]}, in a ${TONE_LABEL[params.tone]} tone. ${channelInstructions} Only reference facts present in the context below — if there's no real researched pain point or tech-stack detail, write a genuinely short, honest, generic-but-still-personal intro rather than inventing a fact. List in personalizationNotes exactly which real facts you actually used (e.g. "mentioned their industry", "referenced a real researched pain point") — if you used none, return an empty array, never a fabricated note.
 
-Writing quality bar — this represents KVL Business Solutions to a real prospect, so it must read like it was written by a sharp, respectful human, not a generic AI template: plain, natural sentences (no corporate filler like "I hope this email finds you well", "in today's fast-paced world", "leverage synergies", "unlock potential"); vary sentence length instead of a flat rhythm; exactly one clear, low-friction ask, never a laundry list of questions; confident and warm, never pushy, salesy, or apologetic. Read it back mentally as if you were the recipient — if it sounds like spam or a mail-merge blast, rewrite it.`,
-      userContent: `Real context about this contact:\n\n${context}\n\nWrite the ${params.channel === "LINKEDIN" ? "LinkedIn message" : "email"} now.`,
+Writing quality bar — this represents KVL Business Solutions to a real prospect, so it must read like it was written by a sharp, respectful human, not a generic AI template: plain, natural sentences (no corporate filler like "I hope this email finds you well", "in today's fast-paced world", "leverage synergies", "unlock potential"); vary sentence length instead of a flat rhythm; exactly one clear, low-friction ask, never a laundry list of questions; confident and warm, never pushy, salesy, or apologetic. Read it back mentally as if you were the recipient — if it sounds like spam or a mail-merge blast, rewrite it.${
+        params.extraContext
+          ? ` The context below also includes real facts about our own company (services, proof of work, guarantees, a real booking link) — weave in ONLY what's genuinely relevant to this specific recipient's industry/situation (never list every service), concretely tie it to how it would help THEIR business, and make the one ask "book a short call" using the real link given. Never invent a service, guarantee, or link not present in that block.`
+          : ""
+      }`,
+      userContent: `Real context about this contact:\n\n${context}${params.extraContext ? `\n\n---\n\nReal context about us (the sender):\n\n${params.extraContext}` : ""}\n\nWrite the ${params.channel === "LINKEDIN" ? "LinkedIn message" : params.channel === "WHATSAPP" ? "WhatsApp message" : "email"} now.`,
       maxTokens: 1500,
       effort: "low",
       schema: DraftResponseSchema,
@@ -110,7 +135,7 @@ Writing quality bar — this represents KVL Business Solutions to a real prospec
         channel: params.channel,
         purpose: params.purpose,
         tone: params.tone,
-        subject: params.channel === "LINKEDIN" ? null : parsed.subject || null,
+        subject: params.channel === "EMAIL" ? parsed.subject || null : null,
         body: parsed.body,
         personalizationNotes: parsed.personalizationNotes,
         status: "DRAFT",

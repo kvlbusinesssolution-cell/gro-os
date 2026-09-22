@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { KVL_SERVICES, type KVLServiceId } from "@/lib/business-development/kvl-service-catalog";
+import { findMatchingDecisionMaker } from "@/lib/business-development/decision-maker-matching";
 import type { DecisionMakerRole } from "@/generated/prisma/client";
 
 const KVL_SERVICE_BY_ID = new Map<string, (typeof KVL_SERVICES)[number]>(KVL_SERVICES.map((s) => [s.id, s]));
@@ -56,6 +57,7 @@ export async function buildContactContext(contactId: string): Promise<string> {
   const contact = await prisma.contact.findUniqueOrThrow({
     where: { id: contactId },
     include: {
+      decisionMaker: true,
       company: {
         include: {
           intelligenceRuns: { orderBy: { createdAt: "desc" }, take: 1 },
@@ -153,14 +155,17 @@ export async function buildContactContext(contactId: string): Promise<string> {
     sections.push("No buying-intent signals scored yet for this company.");
   }
 
-  // Phase 5: if this Contact name-matches a real Phase 3 DecisionMaker at
-  // the same company, surface their verified role/source. `Contact` has no
-  // direct FK to `DecisionMaker` (Phase 3 deliberately has no email field,
-  // see decision-maker-outreach.ts) — case-insensitive full-name matching is
-  // the actual current traceability mechanism, same as
-  // `resolveOutreachContact`'s dedup check.
-  const fullNameKey = `${contact.firstName} ${contact.lastName ?? ""}`.trim().toLowerCase();
-  const decisionMaker = contact.company?.decisionMakers.find((dm) => dm.name.trim().toLowerCase() === fullNameKey);
+  // Phase 5, upgraded Phase 1 (GrowthOS Data & Enrichment Engine): prefer the
+  // real `Contact.decisionMakerId` FK (set by `enrichContact` once a
+  // confident match has been made) over a fresh name match — the FK is the
+  // durable, previously-verified link; name-matching here is now only a
+  // fallback for a Contact that hasn't been through enrichment yet. Shared
+  // matching logic lives in decision-maker-matching.ts's
+  // `findMatchingDecisionMaker` so this and `enrichContact` can never drift
+  // apart.
+  const fullName = `${contact.firstName} ${contact.lastName ?? ""}`.trim();
+  const decisionMaker =
+    contact.decisionMaker ?? findMatchingDecisionMaker(fullName, contact.company?.decisionMakers ?? []);
   if (decisionMaker) {
     sections.push(
       `This contact is the company's ${DECISION_MAKER_ROLE_LABEL[decisionMaker.role] ?? decisionMaker.role}, identified via ${decisionMaker.source}.`,

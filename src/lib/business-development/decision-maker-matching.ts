@@ -167,3 +167,22 @@ export function matchDecisionMakerForOpportunity(
     whyThisPerson,
   };
 }
+
+/**
+ * Phase 1 (GrowthOS Data & Enrichment Engine) — the ONE case-insensitive
+ * full-name match between a Contact and a company's DecisionMaker rows,
+ * shared by `enrichContact` (enrichment.ts, to set the real
+ * `Contact.decisionMakerId` FK) and `buildContactContext`
+ * (outreach/personalization.ts, as a fallback when that FK isn't set yet).
+ * Previously this exact one-line match was duplicated inline only in
+ * personalization.ts — centralizing it here means both callers can never
+ * silently drift apart. Still just a name match (the real fix — a hard FK —
+ * is what `Contact.decisionMakerId` now provides once this has run once);
+ * this function is only the bridge that populates that FK in the first
+ * place.
+ */
+export function findMatchingDecisionMaker<T extends { name: string }>(contactFullName: string, decisionMakers: T[]): T | null {
+  const key = contactFullName.trim().toLowerCase();
+  if (!key) return null;
+  return decisionMakers.find((dm) => dm.name.trim().toLowerCase() === key) ?? null;
+}

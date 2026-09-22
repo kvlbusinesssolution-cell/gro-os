@@ -20,7 +20,7 @@ export default async function ResetPasswordPage() {
       className="flex min-h-svh flex-col items-center justify-center gap-6 bg-background px-6"
       style={brandThemeStyle(branding)}
     >
-      <PublicBrandHeader branding={branding} />
+      <PublicBrandHeader branding={branding} showDefaultLogo />
       <ResetPasswordForm />
     </main>
   );

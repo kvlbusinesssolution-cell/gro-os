@@ -10,6 +10,8 @@ import { notifyUser } from "@/lib/notifications";
 import { isAIConnected } from "@/lib/ai/client";
 import { generateStructured } from "@/lib/ai/fallback";
 import { applyReplyAutomation } from "@/lib/outreach/reply-automation";
+import { computeIntentScore } from "@/lib/business-development/intent-scoring";
+import { analyzeConversation } from "@/lib/business-development/conversation-intelligence";
 import { ReplyIntent as ReplyIntentEnum } from "@/generated/prisma/client";
 import type { DraftChannel, ReplySentiment, ReplyIntent } from "@/generated/prisma/client";
 
@@ -135,6 +137,19 @@ export async function logReplyCore(
   const nextStatus = sentiment === "POSITIVE" ? "INTERESTED" : sentiment === "NEGATIVE" ? "NOT_INTERESTED" : "REPLIED";
   await prisma.contact.update({ where: { id: contactId }, data: { status: nextStatus } });
 
+  // Phase 2 (Buying Intent Intelligence Engine) — event-driven recompute: a
+  // real reply is exactly the kind of event that should update intent
+  // immediately rather than waiting for the next scheduled pass. Wrapped so
+  // a scoring failure never blocks the reply from being logged (same
+  // per-step isolation discipline as company-research-job.ts).
+  if (contact.companyId) {
+    try {
+      await computeIntentScore(contact.companyId);
+    } catch (error) {
+      console.error(`[reply-actions] intent recompute failed for company ${contact.companyId}:`, error);
+    }
+  }
+
   // Sync back to the linked Company — a real reply is a real CRM-worthy
   // signal, same "sync status forward, never backward" rule as
   // addCompanyToCrm's PROSPECT->LEAD bump.
@@ -156,6 +171,16 @@ export async function logReplyCore(
   await logAudit({ userId: loggedByUserId, organizationId, action: "outreach.reply_logged", metadata: { contactId, replyId: reply.id, sentiment } });
   revalidatePath("/dashboard/outreach");
   revalidatePath(`/dashboard/outreach/contacts/${contactId}`);
+
+  // Phase 6 (AI Conversation Intelligence) — event-driven, same isolation
+  // discipline as the intent recompute above: a failed analysis must never
+  // block the reply from being logged.
+  try {
+    await analyzeConversation(organizationId, contactId);
+  } catch (error) {
+    console.error(`[reply-actions] conversation intelligence analysis failed for contact ${contactId}:`, error);
+  }
+
   return { ok: true, replyId: reply.id, sentiment, intent };
 }
 

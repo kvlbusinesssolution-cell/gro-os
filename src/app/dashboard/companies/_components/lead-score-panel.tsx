@@ -28,17 +28,44 @@ export interface LeadScorePanelProps {
   } | null;
 }
 
-const SUB_SCORES: Array<{ key: keyof NonNullable<LeadScorePanelProps["score"]>; label: string }> = [
-  { key: "industryMatchScore", label: "Industry match" },
-  { key: "companySizeScore", label: "Company size" },
-  { key: "growthScore", label: "Growth" },
-  { key: "technologyFitScore", label: "Technology fit" },
-  { key: "opportunitySizeScore", label: "Opportunity size" },
-  { key: "budgetPotentialScore", label: "Budget potential" },
-  { key: "locationScore", label: "Location match" },
-  { key: "digitalMaturityScore", label: "Digital maturity" },
-  { key: "automationNeedScore", label: "Automation need" },
+const SUB_SCORES: Array<{ key: keyof NonNullable<LeadScorePanelProps["score"]>; label: string; strongLabel: string; weakLabel: string }> = [
+  { key: "industryMatchScore", label: "Industry match", strongLabel: "strong industry match", weakLabel: "industry match is moderate" },
+  { key: "companySizeScore", label: "Company size", strongLabel: "a strong-fit company size", weakLabel: "company size fit is moderate" },
+  { key: "growthScore", label: "Growth", strongLabel: "strong growth", weakLabel: "growth signals are weak" },
+  { key: "technologyFitScore", label: "Technology fit", strongLabel: "strong technology fit", weakLabel: "technology fit is moderate" },
+  { key: "opportunitySizeScore", label: "Opportunity size", strongLabel: "a large opportunity size", weakLabel: "opportunity size is modest" },
+  { key: "budgetPotentialScore", label: "Budget potential", strongLabel: "strong budget potential", weakLabel: "budget potential is lower" },
+  { key: "locationScore", label: "Location match", strongLabel: "a strong location match", weakLabel: "location match is moderate" },
+  { key: "digitalMaturityScore", label: "Digital maturity", strongLabel: "high digital maturity", weakLabel: "digital maturity is low" },
+  { key: "automationNeedScore", label: "Automation need", strongLabel: "clear automation need", weakLabel: "automation need is unclear" },
 ];
+
+/**
+ * One-sentence "why this score" narrative — same dominant-strengths/
+ * weakest-factor pattern as opportunity-priority.ts's dominantFactors/
+ * weakestFactor, adapted to LeadScore's 9 sub-scores. Purely a function of
+ * the sub-scores already passed in as props (deterministic, no clock/RNG),
+ * so it's safe to compute directly during render.
+ */
+function leadScoreNarrative(score: NonNullable<LeadScorePanelProps["score"]>): string {
+  const factors = SUB_SCORES.map(({ key, strongLabel, weakLabel }) => ({
+    value: score[key] as number,
+    strongLabel: `${strongLabel} (${score[key]})`,
+    weakLabel: `${weakLabel} (${score[key]})`,
+  }));
+
+  const strengths = factors
+    .filter((f) => f.value >= 70)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 2)
+    .map((f) => f.strongLabel);
+  const weakest = factors.sort((a, b) => a.value - b.value)[0].weakLabel;
+
+  const bandLabel = `${score.band.charAt(0)}${score.band.slice(1).toLowerCase()} lead`;
+  return strengths.length > 0
+    ? `${bandLabel} (score ${score.overallScore}) — ${strengths.join(" and ")}, though ${weakest}.`
+    : `${bandLabel} (score ${score.overallScore}) — no single factor is particularly strong; ${weakest}.`;
+}
 
 export function LeadScorePanel({ companyId, score }: LeadScorePanelProps) {
   const router = useRouter();
@@ -68,6 +95,7 @@ export function LeadScorePanel({ companyId, score }: LeadScorePanelProps) {
           <p className="text-xs text-muted-foreground">Not scored yet. Click Rescore to compute a deterministic lead score.</p>
         ) : (
           <>
+            <p className="text-xs text-muted-foreground">{leadScoreNarrative(score)}</p>
             {SUB_SCORES.map(({ key, label }) => {
               const value = score[key] as number;
               return (

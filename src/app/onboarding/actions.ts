@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { generateUniqueOrgSlug } from "@/lib/slug";
 import { logAudit } from "@/lib/audit";
+import { ensurePlansSeeded, getDefaultFreePlan } from "@/lib/billing/plan-catalog";
 import type { Organization } from "@/generated/prisma/client";
 import {
   companyProfileSchema,
@@ -79,6 +80,22 @@ export async function createOrContinueOrganization(): Promise<OnboardingActionRe
       },
     },
   });
+
+  // Real default plan assignment — every new organization (this is a brand
+  // new signup, never KVL's own org, which is created once by an operator
+  // and flagged Organization.isOwnerOrg = true directly in the database)
+  // starts on the real, limited FREE tier, not silently unlimited. Without
+  // this, checkPlanLimit's own FREE-tier fallback (usage-metering.ts)
+  // would still apply the same limits, but a real BillingAccount row here
+  // means the org's billing/subscription pages have something concrete to
+  // show and upgrade from day one.
+  await ensurePlansSeeded();
+  const freePlan = await getDefaultFreePlan(organization.currency ?? "USD");
+  if (freePlan) {
+    await prisma.billingAccount.create({
+      data: { organizationId: organization.id, currentPlanId: freePlan.id },
+    });
+  }
 
   await logAudit({
     userId,

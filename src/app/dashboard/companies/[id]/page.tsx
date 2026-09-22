@@ -12,7 +12,6 @@ import {
   MapPin,
   Building2,
   Link2,
-  FileDown,
   Handshake,
 } from "lucide-react";
 
@@ -33,11 +32,41 @@ import { CompanyTimeline } from "../_components/company-timeline";
 import { CompanyMap } from "../_components/company-map";
 import { CrmActionsPanel } from "../_components/crm-actions-panel";
 import { CompanyEvidencePanel } from "../_components/company-evidence-panel";
+import { CompanyEnrichmentButton } from "../_components/company-enrichment-button";
 import { CompanyDiscoveryPanel } from "../_components/company-discovery-panel";
 import { CompanyConversationsPanel, type ConversationThreadView } from "../_components/company-conversations-panel";
+import { CompanyOpportunitiesPanel, type CompanyOpportunityRow } from "../_components/company-opportunities-panel";
+import { CompanyDealsPanel, type CompanyDealRow } from "../_components/company-deals-panel";
+import { CompanyDecisionMakersPanel, type CompanyDecisionMakerRow } from "../_components/company-decision-makers-panel";
+import { CompanyDocumentsPanel, type CompanyDocumentRow } from "../_components/company-documents-panel";
+import { CompanyTasksPanel, type CompanyTaskRow, type CompanyReminderRow } from "../_components/company-tasks-panel";
+import { CompanyIntentScorePanel, type CompanyIntentScoreView, type IntentSignalView } from "../_components/company-intent-score-panel";
+import { CompanyIntentHistoryPanel } from "../_components/company-intent-history-panel";
+import { CompanyRecommendedActionPanel } from "../_components/company-recommended-action-panel";
+import { CompanyIntentRecalculateButton } from "../_components/company-intent-recalculate-button";
+import { getIntentRecommendedAction } from "@/lib/business-development/intent-recommendation";
+import { CompanyResearchReportPanel } from "../_components/company-research-report-panel";
+import { buildCompanyResearchReport } from "@/lib/business-development/company-research";
+import { Client360SummaryPanel } from "../_components/client-360-summary-panel";
+import { AskAiAboutClientPanel } from "../_components/ask-ai-about-client-panel";
+import { LinkedInIntelligencePanel } from "../_components/linkedin-intelligence-panel";
+import { getCompanyLinkedInIntelligence } from "@/lib/business-development/linkedin-intelligence";
+import { buildClientSummary } from "@/lib/business-development/client-360";
+import { ExportMenu } from "../_components/export-menu";
 import { getCompanyCompleteTimeline } from "@/lib/business-development/company-complete-timeline";
 import { summarizeCompanyConversation } from "@/lib/business-development/company-conversation-summary";
 import { suggestNextActionForCompany } from "@/lib/business-development/company-next-action";
+import type { OpportunityScoreBreakdown } from "@/lib/business-development/opportunity-priority";
+import type { TaskStatus } from "@/generated/prisma/client";
+
+/** Plain helpers, not components — deliberately kept OUTSIDE CompanyDetailPage's body so "now" is read here, never inside the component's own render (React's purity rules flag `Date.now()` calls made directly inside a component). */
+const DONE_TASK_STATUSES: TaskStatus[] = ["COMPLETED", "CANCELLED"];
+function isOverdueTask(dueDate: Date | null, status: TaskStatus): boolean {
+  return dueDate !== null && dueDate.getTime() < Date.now() && !DONE_TASK_STATUSES.includes(status);
+}
+function isPastReminder(remindAt: Date): boolean {
+  return remindAt.getTime() < Date.now();
+}
 
 export default async function CompanyDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -57,6 +86,26 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
       watchlistEntries: { select: { watchlistId: true } },
       evidence: { orderBy: { discoveredAt: "desc" }, take: 100 },
       referralPartner: { select: { id: true, name: true, type: true, commissionRatePercent: true } },
+      intentScore: true,
+      decisionMakers: { orderBy: { confidence: "desc" } },
+      leadOpportunities: { orderBy: { createdAt: "desc" } },
+      deals: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          dealStage: { select: { name: true } },
+          owner: { select: { name: true, email: true } },
+        },
+      },
+      tasks: {
+        orderBy: { createdAt: "desc" },
+        take: 30,
+        include: { assignedToUser: { select: { name: true, email: true } } },
+      },
+      reminders: { orderBy: { remindAt: "desc" }, take: 20 },
+      contracts: { orderBy: { createdAt: "desc" }, take: 20 },
+      invoices: { orderBy: { issueDate: "desc" }, take: 20 },
+      quotations: { orderBy: { createdAt: "desc" }, take: 20 },
+      subscriptions: { orderBy: { startDate: "desc" }, take: 20 },
       websiteScans: {
         orderBy: { createdAt: "desc" },
         take: 1,
@@ -217,6 +266,124 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
     occurredAt: entry.occurredAt.toISOString(),
   }));
 
+  // ===== New panels' data shaping — every field below reads real, already-
+  // fetched relations; nothing here is fabricated or recomputed from a
+  // different source of truth. =====
+  const opportunityRows: CompanyOpportunityRow[] = company.leadOpportunities.map((o) => ({
+    id: o.id,
+    title: o.title,
+    description: o.description,
+    estimatedValue: o.estimatedValue,
+    opportunityScore: o.opportunityScore,
+    opportunityScoreBreakdown: (o.opportunityScoreBreakdown as unknown as OpportunityScoreBreakdown | null) ?? null,
+    priority: o.priority,
+    priorityReasoning: o.priorityReasoning,
+    status: o.status,
+    recommendedService: o.recommendedService,
+    nextStep: o.nextStep,
+    createdAt: o.createdAt.toISOString(),
+  }));
+
+  const dealRows: CompanyDealRow[] = company.deals.map((d) => ({
+    id: d.id,
+    name: d.name,
+    value: d.value,
+    probability: d.probability,
+    stageName: d.dealStage.name,
+    expectedCloseDate: d.expectedCloseDate ? d.expectedCloseDate.toISOString() : null,
+    ownerName: d.owner?.name ?? d.owner?.email ?? null,
+    priority: d.priority,
+  }));
+
+  const decisionMakerRows: CompanyDecisionMakerRow[] = company.decisionMakers.map((dm) => ({
+    id: dm.id,
+    name: dm.name,
+    role: dm.role,
+    source: dm.source,
+    sourceUrl: dm.sourceUrl,
+    confidence: dm.confidence,
+  }));
+
+  const documentRows: CompanyDocumentRow[] = [
+    ...company.contracts.map((c) => ({
+      id: c.id,
+      kind: "CONTRACT" as const,
+      number: c.contractNumber,
+      title: c.title,
+      status: c.status,
+      amount: c.value,
+      date: (c.startDate ?? c.createdAt).toISOString(),
+      href: `/dashboard/proposal/contracts/${c.id}`,
+    })),
+    ...company.invoices.map((i) => ({
+      id: i.id,
+      kind: "INVOICE" as const,
+      number: i.invoiceNumber,
+      title: "Invoice",
+      status: i.status,
+      amount: i.grandTotal,
+      date: i.issueDate.toISOString(),
+      href: `/dashboard/proposal/invoices/${i.id}`,
+    })),
+    ...company.quotations.map((q) => ({
+      id: q.id,
+      kind: "QUOTATION" as const,
+      number: q.quotationNumber,
+      title: q.title,
+      status: q.status,
+      amount: q.grandTotal,
+      date: q.createdAt.toISOString(),
+      href: `/dashboard/proposal/quotations/${q.id}`,
+    })),
+    ...company.subscriptions.map((s) => ({
+      id: s.id,
+      kind: "SUBSCRIPTION" as const,
+      number: null,
+      title: s.name,
+      status: s.status,
+      amount: s.amount,
+      date: s.startDate.toISOString(),
+      href: null,
+    })),
+  ].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+
+  const taskRows: CompanyTaskRow[] = company.tasks.map((t) => ({
+    id: t.id,
+    title: t.title,
+    status: t.status,
+    priority: t.priority,
+    dueDate: t.dueDate ? t.dueDate.toISOString() : null,
+    isOverdue: isOverdueTask(t.dueDate, t.status),
+    assignedToName: t.assignedToUser?.name ?? t.assignedToUser?.email ?? null,
+  }));
+
+  const reminderRows: CompanyReminderRow[] = company.reminders.map((r) => ({
+    id: r.id,
+    title: r.title,
+    remindAt: r.remindAt.toISOString(),
+    dismissed: r.dismissed,
+    isPast: isPastReminder(r.remindAt),
+  }));
+
+  const intentScoreView: CompanyIntentScoreView | null = company.intentScore
+    ? {
+        score: company.intentScore.score,
+        band: company.intentScore.band,
+        signals: company.intentScore.signals as unknown as IntentSignalView[],
+        reasoning: company.intentScore.reasoning,
+        scoredAt: company.intentScore.scoredAt.toISOString(),
+        buyingStage: company.intentScore.buyingStage,
+        buyingStageReasoning: company.intentScore.buyingStageReasoning,
+        buyingStageConfidence: company.intentScore.buyingStageConfidence,
+      }
+    : null;
+
+  const intentHistory = await prisma.intentScoreHistory.findMany({ where: { companyId: company.id }, orderBy: { calculatedAt: "asc" } });
+  const recommendedAction = await getIntentRecommendedAction(company.id);
+  const researchReport = await buildCompanyResearchReport(company.id);
+  const clientSummary = await buildClientSummary(company.organizationId, company.id);
+  const linkedinIntelligence = await getCompanyLinkedInIntelligence(company.organizationId, company.id);
+
   return (
     <main className="py-8">
       <Container className="flex flex-col gap-6">
@@ -227,43 +394,43 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
           <ArrowLeft className="size-4" /> Back to Companies
         </Link>
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-3">
-            {company.logo ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={company.logo} alt="" className="size-12 rounded-xl border border-border object-cover" />
-            ) : (
-              <span className="flex size-12 items-center justify-center rounded-xl border border-border bg-muted text-muted-foreground">
-                <Building2 className="size-6" />
-              </span>
-            )}
-            <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">{company.name}</h1>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{company.status}</Badge>
-                {company.industry && <Badge variant="outline">{company.industry}</Badge>}
-                {company.leadScore && <LeadScoreBadge band={company.leadScore.band} score={company.leadScore.overallScore} />}
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              {company.logo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={company.logo} alt="" className="size-12 rounded-xl border border-border object-cover" />
+              ) : (
+                <span className="flex size-12 items-center justify-center rounded-xl border border-border bg-muted text-muted-foreground">
+                  <Building2 className="size-6" />
+                </span>
+              )}
+              <div>
+                <h1 className="text-2xl font-semibold tracking-tight text-foreground">{company.name}</h1>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{company.status}</Badge>
+                  {company.industry && <Badge variant="outline">{company.industry}</Badge>}
+                  {company.leadScore && <LeadScoreBadge band={company.leadScore.band} score={company.leadScore.overallScore} />}
+                </div>
               </div>
             </div>
+            <div className="flex items-center gap-3">
+              <ExportMenu companyId={company.id} />
+              <WatchlistPicker
+                companyId={company.id}
+                watchlists={watchlists}
+                memberOf={company.watchlistEntries.map((w) => w.watchlistId)}
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <a
-              href={`/api/export/companies/${company.id}`}
-              className="flex items-center gap-1.5 text-sm text-primary hover:underline"
-            >
-              <FileDown className="size-4" /> Download PDF
-            </a>
-            <WatchlistPicker
-              companyId={company.id}
-              watchlists={watchlists}
-              memberOf={company.watchlistEntries.map((w) => w.watchlistId)}
-            />
-          </div>
+          <div className="gold-shimmer-line" />
         </div>
 
         <Tabs defaultValue="overview">
           <TabsList>
             <TabsTrigger value="overview">Overview</TabsTrigger>
+            <TabsTrigger value="opportunities">Opportunities ({opportunityRows.length})</TabsTrigger>
+            <TabsTrigger value="pipeline">Pipeline</TabsTrigger>
             <TabsTrigger value="intelligence">Intelligence</TabsTrigger>
             <TabsTrigger value="discovery">Discovery &amp; Evidence</TabsTrigger>
             <TabsTrigger value="conversations">Conversations ({emailStats.totalEmails + emailStats.received})</TabsTrigger>
@@ -271,6 +438,10 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
           </TabsList>
 
           <TabsContent value="overview">
+            <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Client360SummaryPanel summary={clientSummary} />
+              <AskAiAboutClientPanel companyId={company.id} />
+            </div>
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
               <div className="flex flex-col gap-4 lg:col-span-2">
                 {company.description && (
@@ -442,7 +613,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                 />
               </div>
 
-              <div className="flex flex-col gap-4">
+              <div className="order-first flex flex-col gap-4 lg:order-none">
                 <CrmActionsPanel
                   companyId={company.id}
                   hasLead={company.leads.length > 0}
@@ -555,6 +726,24 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
 
                 <LeadScorePanel companyId={company.id} score={company.leadScore ? { ...company.leadScore, scoredAt: company.leadScore.scoredAt.toISOString() } : null} />
 
+                <CompanyIntentScorePanel intentScore={intentScoreView} />
+                <CompanyIntentRecalculateButton companyId={company.id} />
+                <CompanyRecommendedActionPanel action={recommendedAction} />
+                <CompanyIntentHistoryPanel
+                  history={intentHistory.map((h) => ({
+                    previousScore: h.previousScore,
+                    newScore: h.newScore,
+                    scoreChange: h.scoreChange,
+                    previousBand: h.previousBand,
+                    newBand: h.newBand,
+                    previousStage: h.previousStage,
+                    newStage: h.newStage,
+                    reason: h.reason,
+                    triggerSignal: h.triggerSignal,
+                    calculatedAt: h.calculatedAt.toISOString(),
+                  }))}
+                />
+
                 <Card glass>
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-base">
@@ -620,6 +809,19 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
             </div>
           </TabsContent>
 
+          <TabsContent value="opportunities">
+            <CompanyOpportunitiesPanel opportunities={opportunityRows} />
+          </TabsContent>
+
+          <TabsContent value="pipeline">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <CompanyDealsPanel deals={dealRows} />
+              <CompanyDecisionMakersPanel decisionMakers={decisionMakerRows} />
+              <CompanyDocumentsPanel documents={documentRows} />
+              <CompanyTasksPanel tasks={taskRows} reminders={reminderRows} />
+            </div>
+          </TabsContent>
+
           <TabsContent value="intelligence">
             <CompanyIntelligencePanel
               companyId={company.id}
@@ -633,9 +835,25 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
               }
               notes={company.researchNotes.map((n) => ({ ...n, createdAt: n.createdAt.toISOString() }))}
             />
+            {linkedinIntelligence && (
+              <div className="mt-6">
+                <LinkedInIntelligencePanel data={linkedinIntelligence} />
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="discovery">
+            <div className="mb-4">
+              <CompanyResearchReportPanel companyId={company.id} report={researchReport} />
+            </div>
+            <div className="mb-4">
+              <CompanyEnrichmentButton
+                companyId={company.id}
+                enrichmentStatus={company.enrichmentStatus}
+                lastEnrichedAt={company.lastEnrichedAt ? company.lastEnrichedAt.toISOString() : null}
+                enrichmentFailureReason={company.enrichmentFailureReason}
+              />
+            </div>
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <CompanyDiscoveryPanel
                 website={company.website}

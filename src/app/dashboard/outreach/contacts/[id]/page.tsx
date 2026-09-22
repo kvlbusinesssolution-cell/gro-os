@@ -16,6 +16,7 @@ import { FollowUpPanel } from "./_components/follow-up-panel";
 import { LogReplyForm } from "./_components/log-reply-form";
 import { RequestMeetingForm } from "./_components/request-meeting-form";
 import { SuggestedReplyButton } from "./_components/suggested-reply-button";
+import { checkWhatsAppEligibility } from "@/lib/outreach/whatsapp-eligibility";
 
 export default async function ContactDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -42,6 +43,7 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
   }
 
   const canApprove = membership.role === "OWNER" || membership.role === "ADMIN";
+  const whatsappEligibility = contact.phone ? await checkWhatsAppEligibility(membership.organizationId, contact.id) : null;
   const intel = contact.company?.intelligenceRuns[0];
   const opportunity = contact.company?.websiteScans[0]?.opportunity;
 
@@ -162,6 +164,11 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
                 {contact.phone && (
                   <span className="flex items-center gap-2">
                     <Phone className="size-3.5 text-muted-foreground" /> {contact.phone}
+                    {whatsappEligibility && (
+                      <Badge variant={whatsappEligibility.status === "ELIGIBLE" || whatsappEligibility.status === "OPTED_IN" ? "accent" : "outline"} title={whatsappEligibility.detail}>
+                        WhatsApp: {whatsappEligibility.status}
+                      </Badge>
+                    )}
                   </span>
                 )}
                 {contact.company && (

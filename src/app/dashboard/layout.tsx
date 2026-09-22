@@ -25,7 +25,7 @@ import { LiveMeetingBadge } from "./_components/live-meeting-badge";
 import { ProfileMenu } from "./_components/profile-menu";
 import { ActivityBar, type ActivityBarItem } from "./_components/activity-bar";
 import { ACTIVE_ORG_COOKIE } from "./_lib/require-membership";
-import { LogoMark } from "@/components/brand/logo-mark";
+import { Logo } from "@/components/brand/logo";
 import { DeviceFingerprintReporter } from "./_components/device-fingerprint-reporter";
 
 /**
@@ -161,18 +161,12 @@ export default async function DashboardLayout({ children }: { children: React.Re
       <header className="sticky top-0 z-30 border-b border-border bg-background/80 backdrop-blur">
         <Container className="flex h-16 items-center justify-between gap-3">
           <div className="flex min-w-0 shrink-0 items-center gap-3">
-            <Link
-              href="/dashboard"
-              className="flex items-center gap-2 text-lg font-semibold tracking-tight text-gradient-brand"
-            >
+            <Link href="/dashboard" className="flex items-center">
               {branding.logoUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- org-uploaded asset, not a static/optimizable local image
                 <img src={branding.logoUrl} alt={branding.brandName} className="h-[22px] w-auto" />
               ) : (
-                <>
-                  <LogoMark size={22} />
-                  KVL
-                </>
+                <Logo size={40} />
               )}
             </Link>
             <span className="hidden h-5 w-px bg-border sm:block" />

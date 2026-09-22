@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { Company, CompanySource, CompanyStatus } from "@/generated/prisma/client";
+import type { Company, CompanySource, CompanyStatus, Contact } from "@/generated/prisma/client";
 
 /**
  * Strips protocol/www/path down to a bare lowercase hostname — the real,
@@ -118,6 +118,7 @@ export async function findOrCreateCompany(input: FindOrCreateCompanyInput): Prom
       organizationId: input.organizationId,
       name: input.name,
       website: input.website || null,
+      domain: normalizedHost,
       industry: input.industry || null,
       email: input.email || null,
       phone: input.phone || null,
@@ -130,4 +131,65 @@ export async function findOrCreateCompany(input: FindOrCreateCompanyInput): Prom
     },
   });
   return { company, wasCreated: true };
+}
+
+export interface FindOrCreateContactInput {
+  organizationId: string;
+  companyId?: string | null;
+  firstName: string;
+  lastName?: string | null;
+  email: string;
+  jobTitle?: string | null;
+  phone?: string | null;
+  country?: string | null;
+  city?: string | null;
+}
+
+export interface FindOrCreateContactResult {
+  contact: Contact;
+  wasCreated: boolean;
+}
+
+/**
+ * Phase 1 (GrowthOS Data & Enrichment Engine) — the same "single choke
+ * point" discipline as `findOrCreateCompany` above, for Contacts. Matches by
+ * case-insensitive email within the organization ONLY (an email is the one
+ * genuinely reliable real-world identity signal for a person — unlike a
+ * company name, a person's display name is far too ambiguous to match on).
+ * A match fills in `companyId` when the caller supplies one and the
+ * existing row doesn't already have one (closes a real gap without
+ * overwriting an existing, possibly more-correct, company link) — this is
+ * the real "contact/company relationship" duplicate-prevention path Phase 1
+ * asked for: re-discovering the same person at the company they're already
+ * linked to never creates a second Contact row.
+ */
+export async function findOrCreateContact(input: FindOrCreateContactInput): Promise<FindOrCreateContactResult> {
+  const email = input.email.trim().toLowerCase();
+
+  const existing = await prisma.contact.findFirst({
+    where: { organizationId: input.organizationId, email: { equals: email, mode: "insensitive" } },
+  });
+
+  if (existing) {
+    const contact =
+      !existing.companyId && input.companyId
+        ? await prisma.contact.update({ where: { id: existing.id }, data: { companyId: input.companyId } })
+        : existing;
+    return { contact, wasCreated: false };
+  }
+
+  const contact = await prisma.contact.create({
+    data: {
+      organizationId: input.organizationId,
+      companyId: input.companyId || null,
+      firstName: input.firstName,
+      lastName: input.lastName || null,
+      email,
+      jobTitle: input.jobTitle || null,
+      phone: input.phone || null,
+      country: input.country || null,
+      city: input.city || null,
+    },
+  });
+  return { contact, wasCreated: true };
 }

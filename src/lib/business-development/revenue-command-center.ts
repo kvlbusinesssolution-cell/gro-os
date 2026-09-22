@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { evaluateSendingIdentityHealth } from "@/lib/outreach/sending-identity";
 
 /**
  * Revenue Command Center — single-screen "TODAY" funnel across the whole
@@ -38,6 +39,24 @@ export interface RevenueCommandCenterToday {
   won: number;
   /** Number of Won deals whose stage moved to Won today, best-effort — see field doc below. */
   wonCaveat: string;
+  /** Deals currently in the Lost stage, same best-effort "last updated today" proxy as won/negotiations — see wonCaveat. */
+  lost: number;
+  /** Deals currently in the Negotiation stage, same best-effort "last updated today" proxy as won — see wonCaveat. */
+  negotiations: number;
+  /** EmailDraft rows with channel WHATSAPP sent today — reuses the same channel-neutral EmailDraft model WhatsAppConversation.messages points at (see schema doc on WhatsAppConversation), never a separate dataset. */
+  whatsappSent: number;
+  /**
+   * EmailDraft rows with channel LINKEDIN sent today. Honestly near-zero by
+   * design: this app's LinkedIn integration only has OIDC login/profile
+   * scopes (no Partner Program messaging access — see linkedin.ts), so real
+   * LinkedIn sends can't happen yet. A real 0 here reflects that limitation
+   * accurately rather than fabricating LinkedIn activity.
+   */
+  linkedinActivity: number;
+  /** Real Call rows (Phase 10 Voice) created today, any outcome. */
+  calls: number;
+  /** Reply rows today whose AI-classified intent is INTERESTED — a real subset of `replies`, never a separate count. */
+  interestedReplies: number;
   /** Real current open-pipeline value (not a "today" delta) from deals on companies this pipeline discovered. Null when there are no such deals with a real value yet — never a fabricated number. */
   pipelineValue: number | null;
   pipelineDealCount: number;
@@ -60,6 +79,14 @@ export interface RevenueCommandCenterToday {
   delivered: number;
   /** EmailDraft rows in FAILED or BOUNCED whose sentAt (falling back to updatedAt when sentAt is null, e.g. a FAILED draft that never sent) is today. */
   failedEmails: number;
+  /**
+   * Phase 4 (Email Deliverability & Sender Health Engine) — real
+   * SendingIdentity status counts for this org, never a revenue attribution
+   * claim (rule 23: "do not attribute revenue from email metrics unless the
+   * existing attribution relationship can prove it" — this is deliberately
+   * just a status rollup, nothing more).
+   */
+  emailHealth: { identityCount: number; healthy: number; warning: number; critical: number; paused: number };
 }
 
 export interface RevenueCommandCenterFunnel {
@@ -128,6 +155,8 @@ export function emailCenterLinkForTile(tileKey: string): string | null {
     case "proposals":
       return "/dashboard/proposal";
     case "won":
+    case "lost":
+    case "negotiations":
     case "pipelineValue":
       return "/dashboard/crm/deals";
     case "aiDraftsCreated":
@@ -139,6 +168,15 @@ export function emailCenterLinkForTile(tileKey: string): string | null {
       return "/dashboard/outreach/inbox?view=sent";
     case "failedEmails":
       return "/dashboard/outreach/inbox?view=failed";
+    case "whatsappSent":
+      return "/dashboard/outreach/inbox?view=sent";
+    case "interestedReplies":
+      return "/dashboard/outreach/inbox?view=inbox";
+    // linkedinActivity and calls: no dedicated list view exists yet
+    // (LinkedIn has no real send capability — see the field's own doc
+    // comment — and calls are only viewable per-contact today, not as a
+    // standalone list), so per this function's own rule these render as
+    // plain, non-linked text rather than an invented route.
     default:
       return null;
   }
@@ -163,6 +201,12 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
     pendingApproval,
     delivered,
     failedEmails,
+    lost,
+    negotiations,
+    whatsappSent,
+    linkedinActivity,
+    calls,
+    interestedReplies,
   ] = await Promise.all([
     prisma.company.findMany({
       where: { organizationId, createdAt: { gte: dayStart } },
@@ -219,10 +263,38 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
         OR: [{ sentAt: { gte: dayStart } }, { sentAt: null, updatedAt: { gte: dayStart } }],
       },
     }),
+    prisma.deal.count({
+      where: { organizationId, dealStage: { name: "Lost" }, updatedAt: { gte: dayStart } },
+    }),
+    prisma.deal.count({
+      where: { organizationId, dealStage: { name: "Negotiation" }, updatedAt: { gte: dayStart } },
+    }),
+    prisma.emailDraft.count({
+      where: { organizationId, channel: "WHATSAPP", status: "SENT", sentAt: { gte: dayStart } },
+    }),
+    prisma.emailDraft.count({
+      where: { organizationId, channel: "LINKEDIN", status: "SENT", sentAt: { gte: dayStart } },
+    }),
+    prisma.call.count({
+      where: { organizationId, createdAt: { gte: dayStart } },
+    }),
+    prisma.reply.count({
+      where: { organizationId, intent: "INTERESTED", receivedAt: { gte: dayStart } },
+    }),
   ]);
 
   const pipelineValues = openPipelineDeals.map((d) => d.value).filter((v): v is number => v != null);
   const pipelineValue = pipelineValues.length > 0 ? pipelineValues.reduce((sum, v) => sum + v, 0) : null;
+
+  const identities = await prisma.sendingIdentity.findMany({ where: { organizationId } });
+  const identityHealths = await Promise.all(identities.map((identity) => evaluateSendingIdentityHealth(identity)));
+  const emailHealth = {
+    identityCount: identities.length,
+    healthy: identityHealths.filter((h) => h.status === "GOOD" || h.status === "NOT_VERIFIED").length,
+    warning: identityHealths.filter((h) => h.status === "WARNING").length,
+    critical: identityHealths.filter((h) => h.status === "CRITICAL").length,
+    paused: identities.filter((i) => i.status === "PAUSED").length,
+  };
 
   return {
     asOf: now,
@@ -237,6 +309,12 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
     proposals,
     won,
     wonCaveat: "Deals currently in the Won stage last updated today — Deal has no dedicated wonAt timestamp, so this is a best-effort proxy, not an exact 'moved to Won today' count.",
+    lost,
+    negotiations,
+    whatsappSent,
+    linkedinActivity,
+    calls,
+    interestedReplies,
     pipelineValue,
     pipelineDealCount: openPipelineDeals.length,
     aiDraftsCreated,
@@ -244,6 +322,7 @@ export async function computeRevenueCommandCenterToday(organizationId: string, n
     pendingApproval,
     delivered,
     failedEmails,
+    emailHealth,
   };
 }
 

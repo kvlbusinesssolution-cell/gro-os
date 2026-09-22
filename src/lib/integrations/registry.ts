@@ -18,6 +18,7 @@ import { microsoftTeamsAdapter } from "./providers/microsoft-teams";
 import { discordAdapter } from "./providers/discord";
 import { telegramAdapter } from "./providers/telegram";
 import { twilioAdapter } from "./providers/twilio";
+import { linkedinAdapter } from "./providers/linkedin";
 import { googleDriveAdapter } from "./providers/google-drive";
 import { dropboxAdapter } from "./providers/dropbox";
 import { onedriveAdapter } from "./providers/onedrive";
@@ -87,6 +88,7 @@ const ADAPTERS: IntegrationAdapter[] = [
   discordAdapter,
   telegramAdapter,
   twilioAdapter,
+  linkedinAdapter,
   // Storage
   googleDriveAdapter,
   dropboxAdapter,

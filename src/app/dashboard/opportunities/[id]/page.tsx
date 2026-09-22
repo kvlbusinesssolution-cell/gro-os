@@ -66,6 +66,14 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
   });
   const decisionMakerMatch = matchDecisionMakerForOpportunity(opportunity.recommendedService, decisionMakers);
 
+  // Phase 11 §47 — historical (not predictive) service-match observation.
+  // Never changes recommendedService/serviceMatchScore themselves.
+  const serviceMatchPattern = opportunity.recommendedService
+    ? await prisma.learningPattern.findFirst({
+        where: { organizationId: membership.organizationId, patternType: "SERVICE", status: { in: ["EMERGING", "ACTIVE"] }, name: `service: ${opportunity.recommendedService}` },
+      })
+    : null;
+
   // Phase 5 — "Convert to Outreach" durable-state detection. Mirrors
   // resolveOutreachContact's own case-insensitive full-name-within-company
   // matching (decision-maker-outreach.ts) exactly, so "already converted"
@@ -319,6 +327,14 @@ export default async function OpportunityDetailPage({ params }: { params: Promis
                   </Badge>
                   {brief.serviceMatchScore != null && (
                     <p className="text-xs text-muted-foreground">Match score: {brief.serviceMatchScore}%</p>
+                  )}
+                  {serviceMatchPattern && (
+                    <Link
+                      href={`/dashboard/learning/patterns/${serviceMatchPattern.id}`}
+                      className="w-fit rounded-full border border-primary/20 bg-primary/5 px-2.5 py-1 text-[11px] text-primary hover:underline"
+                    >
+                      HISTORICAL OBSERVATION: {serviceMatchPattern.conversionRate !== null ? `${Math.round(serviceMatchPattern.conversionRate * 100)}% observed conversion` : "not enough decided outcomes yet"} (n={serviceMatchPattern.sampleSize}, {serviceMatchPattern.sampleClassification.replace(/_/g, " ")})
+                    </Link>
                   )}
                 </>
               ) : (

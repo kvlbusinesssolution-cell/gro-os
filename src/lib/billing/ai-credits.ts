@@ -112,6 +112,11 @@ export interface AICreditAvailability {
  * conflated with it.
  */
 export async function getAICreditAvailability(organizationId: string): Promise<AICreditAvailability> {
+  const organization = await prisma.organization.findUnique({ where: { id: organizationId }, select: { isOwnerOrg: true } });
+  if (organization?.isOwnerOrg) {
+    return { unlimited: true, remainingCredits: Infinity, monthlyCreditsGranted: 0, monthlyCreditsUsed: 0, purchasedCreditsRemaining: 0 };
+  }
+
   const account = await prisma.billingAccount.findUnique({
     where: { organizationId },
     include: { currentPlan: true, aiCreditLedger: true },

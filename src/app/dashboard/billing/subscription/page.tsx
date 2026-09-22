@@ -79,6 +79,30 @@ export default async function BillingSubscriptionPage({
   const canManage = EDITOR_ROLES.has(membership.role);
   const params = await searchParams;
 
+  // KVL Business Solutions' own tenant org is exempt from every plan
+  // (checkPlanLimit, src/lib/billing/usage-metering.ts) — show that plainly
+  // instead of a billing UI that implies it could ever be charged/limited.
+  if (membership.organization.isOwnerOrg) {
+    return (
+      <main className="py-8">
+        <Container className="flex flex-col gap-6">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Plan & billing</h1>
+            <p className="text-sm text-muted-foreground">This is KVL Business Solutions&rsquo; own organization — unlimited on every resource, exempt from every plan, never billed.</p>
+          </div>
+          <Card glass className="border-primary/40 shadow-elevated shadow-glow-primary">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CreditCard className="size-4" /> Unlimited — Owner Account
+              </CardTitle>
+              <CardDescription>Every other organization on this platform runs on the real paid Plan catalog; this one doesn&rsquo;t.</CardDescription>
+            </CardHeader>
+          </Card>
+        </Container>
+      </main>
+    );
+  }
+
   // Real per-currency Plan pricing (Phase 20) — an org sees/selects plans
   // priced in its own Organization.currency; SUPPORTED_PLAN_CURRENCIES.
   // includes(...) guards against an org whose currency has no seeded plan
@@ -125,7 +149,7 @@ export default async function BillingSubscriptionPage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Plan & billing</h1>
           <p className="text-sm text-muted-foreground">
-            KVL Business Solutions runs no subscriptions — Full Access is free for every organization, no card required.
+            Manage your organization&rsquo;s plan, payment method, and invoices.
           </p>
         </div>
 

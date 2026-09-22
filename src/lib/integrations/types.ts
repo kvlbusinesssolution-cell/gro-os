@@ -58,6 +58,7 @@ export type IntegrationProviderKey =
   | "DISCORD"
   | "TELEGRAM"
   | "TWILIO"
+  | "LINKEDIN"
   // Storage
   | "GOOGLE_DRIVE"
   | "DROPBOX"

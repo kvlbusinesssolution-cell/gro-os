@@ -36,11 +36,22 @@ function describeAIError(error: unknown): ActionResult {
   return { ok: false, errorKind: "generic", error: "Something went wrong. Please try again." };
 }
 
-async function resolveMembershipForCompany(userId: string, companyId: string) {
-  const membership = await prisma.membership.findFirst({ where: { userId, status: "ACTIVE" }, orderBy: { createdAt: "asc" } });
-  if (!membership) return null;
+/**
+ * Phase 13 fix: this used to resolve the user's *first* membership
+ * (by createdAt) and then check it against the company's org — which
+ * fails closed (denies access, never leaks) for a real multi-org user
+ * whose first-created membership isn't the one that owns this company.
+ * Now it looks up the company first and matches the membership to *its*
+ * org, so a legitimate multi-org user can reach companies in any org
+ * they belong to.
+ */
+export async function resolveMembershipForCompany(userId: string, companyId: string) {
   const company = await prisma.company.findUnique({ where: { id: companyId } });
-  if (!company || company.organizationId !== membership.organizationId) return null;
+  if (!company) return null;
+  const membership = await prisma.membership.findFirst({
+    where: { userId, status: "ACTIVE", organizationId: company.organizationId },
+  });
+  if (!membership) return null;
   return { membership, company };
 }
 

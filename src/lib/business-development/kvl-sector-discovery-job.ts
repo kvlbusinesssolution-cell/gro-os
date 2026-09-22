@@ -39,6 +39,28 @@ const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 /** Owner-confirmed real monthly revenue target (set 2026-09-17), in INR — reported in the daily owner report against real won-deal value so far this calendar month. */
 const KVL_MONTHLY_REVENUE_TARGET_INR = 600_000;
 
+/**
+ * Real facts about KVL Business Solutions itself, sourced directly from
+ * kvlbusinesssolutions.com (checked 2026-09-18) — never invented. Passed as
+ * `extraContext` to generateEmailDraft (see draft-generator.ts) so the
+ * first-touch email can actually explain what KVL does and why the
+ * recipient should reply, instead of the generic no-sender-context intro it
+ * produced before (buildContactContext only ever covers the recipient's
+ * side). Update this block if the real site's services/guarantees/proof of
+ * work change — keep it grounded in what's actually live on the site, same
+ * discipline as everywhere else in this file.
+ */
+const KVL_COMPANY_PROFILE = `KVL Business Solutions (kvlbusinesssolutions.com) — founded 2015, Patna, India, MSME-registered, Razorpay Verified Partner.
+
+Services: Website Development, E-commerce Development, Custom Software Development, SaaS Development, Mobile App Development (Android), ERP, CRM, AI Automation, Industrial Automation, GPS Tracking, CCTV, Civil Engineering work.
+
+Differentiators (all real, verifiable): fixed pricing with a 30-day money-back guarantee; free onboarding; 1-hour response SLA on critical issues; modern stack (Next.js, React, TypeScript); "real products, real users, verifiable today" — not case studies we wrote ourselves.
+
+Real live proof of work (public, linkable): VidYT (AI video-scoring platform), AapKaPlot (property marketplace), Gravity (family-location tracking app, live in Kenya/India/UAE/UK/USA), Restro OS (restaurant management, Zomato/Swiggy integration), KVL CRM, KVL GrowthOS (this very AI sales-agent platform), KVL Super AI (AI chatbot), KVL International School (school website), Body Tracker (computer-vision fitness app).
+
+Real meeting-booking link (use this exact URL, never invent one): https://kvlbusinesssolutions.com/book-demo
+Real contact: info@kvlbusinesssolutions.com`;
+
 interface CountryQuery {
   country: string;
   query: string;
@@ -194,13 +216,25 @@ async function autoOutreachToCompany(organizationId: string, campaignId: string,
   await prisma.campaignContact.create({ data: { campaignId, contactId: contact.id } });
 
   try {
-    const draft = await generateEmailDraft({ contactId: contact.id, purpose: "INTRODUCTION", tone: "PROFESSIONAL", channel: "EMAIL", campaignId });
+    const draft = await generateEmailDraft({
+      contactId: contact.id,
+      purpose: "INTRODUCTION",
+      tone: "PROFESSIONAL",
+      channel: "EMAIL",
+      campaignId,
+      extraContext: KVL_COMPANY_PROFILE,
+    });
 
     await prisma.emailDraft.update({ where: { id: draft.id }, data: { status: "APPROVED", approvedAt: new Date() } });
     await prisma.emailDraft.update({ where: { id: draft.id }, data: { status: "QUEUED", queuedAt: new Date() } });
 
     const baseUrl = getAppBaseUrl();
-    const rawHtml = `<p>${draft.body.replace(/\n/g, "<br/>")}</p>`;
+    // The KVL_COMPANY_PROFILE booking link (and anything else the model
+    // writes as a bare URL) would otherwise render as plain unclickable
+    // text — no other outreach path in this codebase auto-links URLs in the
+    // body, so do it here rather than leaving a real CTA link dead.
+    const linkedBody = draft.body.replace(/(https?:\/\/[^\s<]+)/g, (url) => `<a href="${url}">${url}</a>`);
+    const rawHtml = `<p>${linkedBody.replace(/\n/g, "<br/>")}</p>`;
     const html = draft.trackingToken ? injectTracking(rawHtml, draft.trackingToken, baseUrl) : rawHtml;
 
     const result = await sendOutreachEmail(organizationId, { to: email, subject: draft.subject ?? `Working with ${company.name}`, html, text: draft.body });

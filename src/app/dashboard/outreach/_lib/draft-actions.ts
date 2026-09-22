@@ -61,7 +61,7 @@ export async function generateDraftForContact(
       organizationId: membership.organizationId,
       type: "EMAIL_READY",
       title: "Draft ready for review",
-      message: `${draft.channel === "LINKEDIN" ? "A LinkedIn message" : draft.subject ?? "An email"} for ${contact.firstName} is ready.`,
+      message: `${draft.channel === "LINKEDIN" ? "A LinkedIn message" : draft.channel === "WHATSAPP" ? "A WhatsApp message" : (draft.subject ?? "An email")} for ${contact.firstName} is ready.`,
     });
     revalidatePath(`/dashboard/outreach/contacts/${contactId}`);
     return { ok: true, draft };

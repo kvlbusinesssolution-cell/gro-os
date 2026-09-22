@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import type { OpportunityPriority, Prisma } from "@/generated/prisma/client";
 
 import { computeIntentScore } from "@/lib/business-development/intent-scoring";
+import { publishRealtimeEvent } from "@/lib/realtime/event-bus";
 
 /**
  * Opportunity Score & Priority — Phase 4, factor #3 of 3 ("How relevant and
@@ -169,11 +170,18 @@ export async function computeOpportunityScore(opportunityId: string): Promise<Op
     where: { id: opportunityId },
     data: {
       opportunityScore: total,
+      previousOpportunityScore: opportunity.opportunityScore,
       opportunityScoreBreakdown: breakdown as unknown as Prisma.InputJsonValue,
       priority,
       priorityReasoning,
     },
   });
+
+  // Live-refreshes the Priority Queue (and anything else on the dashboard)
+  // for every connected member of this org — see RealtimeRefresher, mounted
+  // once in dashboard/layout.tsx, which SSE-subscribes and calls
+  // router.refresh() on any event for the org regardless of `kind`.
+  publishRealtimeEvent({ kind: "activity", organizationId: opportunity.company.organizationId });
 
   return { opportunityScore: total, breakdown, priority, priorityReasoning };
 }

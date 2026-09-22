@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Building2, Users2, Mail, Globe, Bookmark, Map as MapIcon } from "lucide-react";
+import { Building2, Users2, Mail, Globe, Bookmark, Map as MapIcon, ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent } from "@/components/ui/card";
@@ -30,19 +30,26 @@ const STATUS_VARIANT: Record<string, "outline" | "accent" | "default" | "seconda
   CHURNED: "secondary",
 };
 
-export default async function CompaniesPage() {
-  const { membership } = await requireActiveMembership("/dashboard/companies");
+const PAGE_SIZE = 60;
 
-  const [companies, watchlists, stats, referralPartners] = await Promise.all([
+export default async function CompaniesPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
+  const { membership } = await requireActiveMembership("/dashboard/companies");
+  const { page: pageParam } = await searchParams;
+  const page = Math.max(1, Number.parseInt(pageParam ?? "1", 10) || 1);
+
+  const [companies, totalCompanies, watchlists, stats, referralPartners] = await Promise.all([
     prisma.company.findMany({
       where: { organizationId: membership.organizationId },
       orderBy: { createdAt: "desc" },
+      skip: (page - 1) * PAGE_SIZE,
+      take: PAGE_SIZE,
       include: {
         _count: { select: { leads: true, clients: true, projects: true } },
         leadScore: true,
         watchlistEntries: { select: { watchlistId: true } },
       },
     }),
+    prisma.company.count({ where: { organizationId: membership.organizationId } }),
     prisma.watchlist.findMany({
       where: { organizationId: membership.organizationId },
       orderBy: { name: "asc" },
@@ -88,7 +95,7 @@ export default async function CompaniesPage() {
 
         <CompanyStatsStrip stats={stats} currency={membership.organization.currency} />
 
-        {companies.length === 0 ? (
+        {totalCompanies === 0 ? (
           <Card glass>
             <CardContent className="flex flex-col items-center gap-3 p-12 text-center">
               <Building2 className="size-8 text-muted-foreground" strokeWidth={1.5} />
@@ -157,6 +164,35 @@ export default async function CompaniesPage() {
                 </Card>
               </Link>
             ))}
+          </div>
+        )}
+
+        {totalCompanies > PAGE_SIZE && (
+          <div className="flex items-center justify-between gap-4 text-sm text-muted-foreground">
+            <p>
+              Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, totalCompanies)} of {totalCompanies}{" "}
+              companies
+            </p>
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/dashboard/companies?page=${page - 1}`}
+                aria-disabled={page <= 1}
+                className={`flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 font-medium text-foreground transition-colors ${
+                  page <= 1 ? "pointer-events-none opacity-40" : "hover:bg-accent"
+                }`}
+              >
+                <ChevronLeft className="size-3.5" /> Previous
+              </Link>
+              <Link
+                href={`/dashboard/companies?page=${page + 1}`}
+                aria-disabled={page * PAGE_SIZE >= totalCompanies}
+                className={`flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 font-medium text-foreground transition-colors ${
+                  page * PAGE_SIZE >= totalCompanies ? "pointer-events-none opacity-40" : "hover:bg-accent"
+                }`}
+              >
+                Next <ChevronRight className="size-3.5" />
+              </Link>
+            </div>
           </div>
         )}
       </Container>

@@ -9,6 +9,8 @@ export const ar: Dictionary = {
   "nav.opportunities": "فرص الذكاء الاصطناعي",
   "nav.priorityQueue": "قائمة أولويات الذكاء الاصطناعي",
   "nav.revenueCommandCenter": "مركز قيادة الإيرادات",
+  "nav.learning": "تعلم الإيرادات",
+  "nav.forecast": "الإيرادات التنبؤية",
   "nav.clients": "العملاء",
   "nav.promptLibrary": "مكتبة الإرشادات",
   "nav.hr": "الموارد البشرية",

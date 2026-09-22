@@ -30,7 +30,7 @@ export default async function LoginPage() {
           aria-hidden
           className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-full bg-radial-fade lg:hidden"
         />
-        <PublicBrandHeader branding={branding} />
+        <PublicBrandHeader branding={branding} showDefaultLogo />
         <Suspense fallback={null}>
           <LoginForm branding={branding} oauthProviders={getEnabledOAuthProviders()} />
         </Suspense>

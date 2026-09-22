@@ -310,18 +310,23 @@ describe("Phase 3 Email Center — real end-to-end chain", () => {
   it("Step 10: getCompanyCompleteTimeline includes every real event, chronologically ordered, each with a real-or-null linkHref", async () => {
     const timeline = await getCompanyCompleteTimeline(orgId, companyId);
 
+    // getCompanyCompleteTimeline's real type strings are UPPERCASE_SNAKE_CASE
+    // (see the "email_drafted" etc. doc comment on that file for why:
+    // EMAIL_DRAFTED, WHATSAPP_MESSAGE_DELIVERED, etc.), matching this
+    // fixture's real records. Reply intent/sentiment classification is
+    // metadata on the same REPLY_RECEIVED entry, not a separate event type,
+    // so there is no standalone "classified" type to assert on.
     const types = timeline.map((e) => e.type);
     for (const expectedType of [
-      "company_discovered",
-      "email_drafted",
-      "email_sent",
-      "reply_received",
-      "reply_classified",
-      "opportunity_detected",
-      "decision_maker_identified",
-      "meeting_requested",
-      "proposal_generated",
-      "deal_created",
+      "COMPANY_CREATED",
+      "EMAIL_DRAFTED",
+      "EMAIL_SENT",
+      "REPLY_RECEIVED",
+      "OPPORTUNITY_CREATED",
+      "DECISION_MAKER_FOUND",
+      "MEETING_SCHEDULED",
+      "PROPOSAL_CREATED",
+      "DEAL_CREATED",
     ]) {
       expect(types).toContain(expectedType);
     }
@@ -339,11 +344,11 @@ describe("Phase 3 Email Center — real end-to-end chain", () => {
       }
     }
 
-    const dealEntry = timeline.find((e) => e.type === "deal_created");
+    const dealEntry = timeline.find((e) => e.type === "DEAL_CREATED");
     expect(dealEntry?.linkHref).toBe(`/dashboard/crm/deals/${dealId}`);
-    const proposalEntry = timeline.find((e) => e.type === "proposal_generated");
+    const proposalEntry = timeline.find((e) => e.type === "PROPOSAL_CREATED");
     expect(proposalEntry?.linkHref).toBe(`/dashboard/proposal/proposals/${proposalId}`);
-    const dmEntry = timeline.find((e) => e.type === "decision_maker_identified");
+    const dmEntry = timeline.find((e) => e.type === "DECISION_MAKER_FOUND");
     expect(dmEntry?.recordId).toBe(decisionMakerId);
     expect(dmEntry?.linkHref).toBeNull(); // honest — no standalone decision-maker page exists.
   });

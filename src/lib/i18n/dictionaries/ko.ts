@@ -9,6 +9,8 @@ export const ko: Dictionary = {
   "nav.opportunities": "AI 기회",
   "nav.priorityQueue": "AI 우선순위 대기열",
   "nav.revenueCommandCenter": "매출 커맨드 센터",
+  "nav.learning": "매출 학습",
+  "nav.forecast": "예측 매출",
   "nav.clients": "고객사",
   "nav.promptLibrary": "프롬프트 라이브러리",
   "nav.hr": "인사",
