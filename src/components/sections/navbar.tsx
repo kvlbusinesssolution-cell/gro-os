@@ -18,8 +18,8 @@ import { ProfileMenu } from "@/app/dashboard/_components/profile-menu";
    on both "/" and "/product" (see src/app/product/page.tsx), and a bare
    "#id" only resolves against whichever page is currently loaded — the
    absolute form always navigates to the right page's section regardless of
-   where the user is. Pricing, Security, and FAQ live on /product now, not
-   on the homepage (see src/app/product/page.tsx). */
+   where the user is. Security and FAQ live on /product now, not on the
+   homepage (see src/app/product/page.tsx). */
 const PRODUCT_LINKS = [
   {
     label: "AI Agents",
@@ -35,11 +35,6 @@ const PRODUCT_LINKS = [
     label: "Product tour",
     href: "/product",
     description: "The full walkthrough — dashboard, the shift to autonomous, every capability.",
-  },
-  {
-    label: "Pricing",
-    href: "/product#pricing",
-    description: "Simple, transparent plans for every stage.",
   },
   {
     label: "Security",

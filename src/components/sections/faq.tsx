@@ -30,9 +30,9 @@ const FAQS: FAQItem[] = [
       "Your leads, messages, and pipeline data are used only to run your workspace. We don't sell customer data or use it to train models outside your account. Data is encrypted in transit and at rest, and access is restricted on a need-to-know basis.",
   },
   {
-    question: "How flexible is pricing and the contract?",
+    question: "How does pricing work?",
     answer:
-      "Plans are billed monthly or yearly with no multi-year lock-in required. You can change plans or lead volume as you grow, and Enterprise agreements are scoped to your specific workflow and support needs.",
+      "There's no public price list or self-serve plan to pick from. Talk to our team, tell us about your pipeline and lead volume, and we'll scope an agreement around your specific workflow and support needs.",
   },
   {
     question: "How long does onboarding take?",
@@ -52,7 +52,7 @@ const FAQS: FAQItem[] = [
   {
     question: "What if we want to cancel?",
     answer:
-      "You can cancel a monthly plan at any time from your account settings, effective at the end of the current billing period. Yearly plans can be cancelled the same way and won't auto-renew past the paid term.",
+      "You can cancel at any time — reach out to your account contact and we'll wind things down under the terms we agreed on.",
   },
 ];
 

@@ -58,11 +58,6 @@ const jsonLd = {
     name: "KVL Business Solutions",
     url: BASE_URL,
   },
-  offers: {
-    "@type": "Offer",
-    price: "149",
-    priceCurrency: "USD",
-  },
 };
 
 export default function RootLayout({

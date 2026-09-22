@@ -5,7 +5,6 @@ import { DashboardPreview } from "@/components/sections/dashboard-preview";
 import { ProblemSolution } from "@/components/sections/problem-solution";
 import { Features } from "@/components/sections/features";
 import { SocialProof } from "@/components/sections/social-proof";
-import { Pricing } from "@/components/sections/pricing";
 import { Security } from "@/components/sections/security";
 import { FAQ } from "@/components/sections/faq";
 import { CTA } from "@/components/sections/cta";
@@ -45,9 +44,6 @@ export default function ProductTourPage() {
         <EnterpriseTrustBar />
         <div id="social-proof">
           <SocialProof />
-        </div>
-        <div id="pricing">
-          <Pricing />
         </div>
         <WhyChooseKVL />
         <div id="security">

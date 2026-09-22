@@ -16,7 +16,6 @@ const LINK_GROUPS = [
     links: [
       { label: "Features", href: "/product" },
       { label: "How it works", href: "/#how-it-works" },
-      { label: "Pricing", href: "/product#pricing" },
       { label: "Trust Center", href: "/trust" },
       { label: "AI Runtime", href: "/ai-runtime" },
       { label: "Admin Platform", href: "/admin-platform" },
