@@ -14,6 +14,7 @@ import { generateLeadOpportunities } from "./opportunity-engine";
 import { computeOpportunityScore } from "./opportunity-priority";
 import { findMatchingDecisionMaker } from "./decision-maker-matching";
 import { buildWebsiteIntelligenceEvidence } from "./website-intelligence";
+import { classifyBusinessType } from "./business-type-classification";
 import type { EnrichmentRun, EnrichmentRunStatus, EnrichmentTrigger } from "@/generated/prisma/client";
 
 /**
@@ -40,6 +41,7 @@ import type { EnrichmentRun, EnrichmentRunStatus, EnrichmentTrigger } from "@/ge
 
 const STEP_WEBSITE_EVIDENCE = "WEBSITE_EVIDENCE";
 const STEP_COMPANY_INTELLIGENCE = "COMPANY_INTELLIGENCE";
+const STEP_BUSINESS_TYPE = "BUSINESS_TYPE";
 const STEP_INTENT_SCORE = "INTENT_SCORE";
 const STEP_DECISION_MAKERS = "DECISION_MAKERS";
 const STEP_OPPORTUNITIES = "OPPORTUNITIES";
@@ -154,6 +156,18 @@ export async function enrichCompany(companyId: string, options: EnrichCompanyOpt
     stepsFailed.push(STEP_COMPANY_INTELLIGENCE);
     errors.push(`${STEP_COMPANY_INTELLIGENCE}: ${errorMessage(error)}`);
     console.error(`[enrichment] company ${companyId} — ${STEP_COMPANY_INTELLIGENCE} failed:`, error);
+  }
+
+  // Phase 27 (real field-waterfall proof-of-integration): a real,
+  // deterministic taxonomy classification, not an open-ended guess — never
+  // blocks the rest of the pipeline if it fails (e.g. AI chain exhausted).
+  try {
+    await classifyBusinessType(companyId);
+    stepsCompleted.push(STEP_BUSINESS_TYPE);
+  } catch (error) {
+    stepsFailed.push(STEP_BUSINESS_TYPE);
+    errors.push(`${STEP_BUSINESS_TYPE}: ${errorMessage(error)}`);
+    console.error(`[enrichment] company ${companyId} — ${STEP_BUSINESS_TYPE} failed:`, error);
   }
 
   try {

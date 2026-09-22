@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { AIUsageProvider } from "@/generated/prisma/client";
+import type { AIUsageProvider, AIUsageStatus } from "@/generated/prisma/client";
 
 /**
  * AI Credit System — meters real Claude/OpenAI/Gemini/Groq/embedding usage
@@ -57,6 +57,12 @@ async function ensureLedger(billingAccountId: string): Promise<{ monthlyCreditsG
  * call it's recording). Deducts from the monthly allotment first, then
  * from any purchased top-up for the overflow — both real, persisted
  * numbers, atomically updated in one transaction.
+ *
+ * Phase 27: `status`/`latencyMs` are optional and additive — every existing
+ * call site keeps working unchanged (status defaults to the real completed
+ * call it always represented). A FAILED attempt (see fallback.ts's
+ * recordProviderAttemptFailure) passes 0 tokens — nothing was actually
+ * generated, so 0 real credits are ever deducted for a failure.
  */
 export async function recordAIUsage(
   organizationId: string,
@@ -65,6 +71,8 @@ export async function recordAIUsage(
   inputTokens: number,
   outputTokens: number,
   context?: string,
+  status: AIUsageStatus = "SUCCESS",
+  latencyMs?: number,
 ): Promise<void> {
   try {
     const billingAccount = await prisma.billingAccount.findUnique({ where: { organizationId }, select: { id: true } });
@@ -74,8 +82,10 @@ export async function recordAIUsage(
 
     await prisma.$transaction(async (tx) => {
       await tx.aIUsageEvent.create({
-        data: { organizationId, billingAccountId: billingAccount.id, provider, model, inputTokens, outputTokens, creditsUsed, context },
+        data: { organizationId, billingAccountId: billingAccount.id, provider, model, inputTokens, outputTokens, creditsUsed, context, status, latencyMs },
       });
+
+      if (creditsUsed === 0) return; // a FAILED attempt (or a genuinely free call) never touches the ledger
 
       const ledger = await ensureLedger(billingAccount.id);
       const remainingMonthly = Math.max(0, ledger.monthlyCreditsGranted - ledger.monthlyCreditsUsed);

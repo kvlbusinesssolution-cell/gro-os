@@ -2,6 +2,7 @@ import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 import { AGENT_MODEL, getAnthropicClient, isAIConnected } from "@/lib/ai/client";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredResponse, ProviderTextRequest, ProviderTextResponse } from "./types";
+import { PROVIDER_TIMEOUT_MS } from "./timeout";
 
 /**
  * The primary, paid provider — real Claude Opus via the Anthropic SDK. This
@@ -23,22 +24,25 @@ export const anthropicProvider: AIProviderAdapter = {
 
   async generateText(req: ProviderTextRequest): Promise<ProviderTextResponse> {
     const client = getAnthropicClient();
-    const response = await client.messages.create({
-      model: AGENT_MODEL,
-      max_tokens: req.maxTokens,
-      thinking: { type: "adaptive" },
-      ...(req.effort ? { output_config: { effort: req.effort } } : {}),
-      ...(req.webSearch ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: req.webSearch.maxUses }] } : {}),
-      system: req.system,
-      messages: [
-        {
-          role: "user",
-          content: req.image
-            ? [{ type: "image", source: { type: "base64", media_type: req.image.mediaType, data: req.image.base64 } }, { type: "text", text: req.userContent }]
-            : req.userContent,
-        },
-      ],
-    });
+    const response = await client.messages.create(
+      {
+        model: AGENT_MODEL,
+        max_tokens: req.maxTokens,
+        thinking: { type: "adaptive" },
+        ...(req.effort ? { output_config: { effort: req.effort } } : {}),
+        ...(req.webSearch ? { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: req.webSearch.maxUses }] } : {}),
+        system: req.system,
+        messages: [
+          {
+            role: "user",
+            content: req.image
+              ? [{ type: "image", source: { type: "base64", media_type: req.image.mediaType, data: req.image.base64 } }, { type: "text", text: req.userContent }]
+              : req.userContent,
+          },
+        ],
+      },
+      { timeout: PROVIDER_TIMEOUT_MS },
+    );
 
     const text = response.content
       .map((block) => (block.type === "text" ? block.text : ""))
@@ -50,14 +54,17 @@ export const anthropicProvider: AIProviderAdapter = {
 
   async generateStructured<T>(req: ProviderStructuredRequest<T>): Promise<ProviderStructuredResponse<T>> {
     const client = getAnthropicClient();
-    const response = await client.messages.parse({
-      model: AGENT_MODEL,
-      max_tokens: req.maxTokens,
-      thinking: { type: "adaptive" },
-      output_config: { effort: req.effort ?? "medium", format: zodOutputFormat(req.schema) },
-      system: req.system,
-      messages: [{ role: "user", content: req.userContent }],
-    });
+    const response = await client.messages.parse(
+      {
+        model: AGENT_MODEL,
+        max_tokens: req.maxTokens,
+        thinking: { type: "adaptive" },
+        output_config: { effort: req.effort ?? "medium", format: zodOutputFormat(req.schema) },
+        system: req.system,
+        messages: [{ role: "user", content: req.userContent }],
+      },
+      { timeout: PROVIDER_TIMEOUT_MS },
+    );
 
     if (!response.parsed_output) {
       throw new Error("Anthropic structured output failed schema validation.");

@@ -1,6 +1,7 @@
 import { generateStructuredViaJsonMode } from "./json-mode";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredResponse, ProviderTextRequest, ProviderTextResponse } from "./types";
 import { ProviderHttpError, parseRetryAfterMs } from "./provider-error";
+import { PROVIDER_TIMEOUT_MS } from "./timeout";
 
 /**
  * Primary provider (see fallback.ts's PROVIDER_CHAIN) — Google's Gemini API
@@ -51,6 +52,7 @@ async function callRaw(
       contents: [{ role: "user", parts }],
       generationConfig: { maxOutputTokens: maxTokens },
     }),
+    signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
   });
 
   if (!res.ok) {

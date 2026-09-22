@@ -2,6 +2,7 @@ import { generateStructuredViaJsonMode } from "./json-mode";
 import type { AIProviderAdapter, ProviderStructuredRequest, ProviderStructuredResponse, ProviderTextRequest, ProviderTextResponse } from "./types";
 import type { AIUsageProvider } from "@/generated/prisma/client";
 import { ProviderHttpError, parseRetryAfterMs } from "./provider-error";
+import { PROVIDER_TIMEOUT_MS } from "./timeout";
 
 /**
  * Shared implementation for the three providers in the chain that speak the
@@ -68,6 +69,7 @@ export function createOpenAICompatibleProvider(config: {
           { role: "user", content: userContent },
         ],
       }),
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
     });
 
     if (!res.ok) {

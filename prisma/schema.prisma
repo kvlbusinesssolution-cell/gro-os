@@ -3359,6 +3359,15 @@ enum AIUsageProvider {
   EMBEDDING
 }
 
+// Phase 27 (real provider-attempt tracking) — SUCCESS is the default so
+// every pre-existing AIUsageEvent row (all of which represent a real
+// completed call, per recordAIUsage's original "always called AFTER a real
+// response has already returned" contract) remains valid without a backfill.
+enum AIUsageStatus {
+  SUCCESS
+  FAILED
+}
+
 // One real row per AI call this session instruments (src/lib/ai/agent-runtime.ts,
 // src/lib/rag/embeddings.ts) — inputTokens/outputTokens are the model's own
 // real, reported usage (response.usage.input_tokens/output_tokens), never
@@ -3374,6 +3383,10 @@ model AIUsageEvent {
   outputTokens     Int             @default(0)
   creditsUsed      Float
   context          String?
+  /** Phase 27: SUCCESS for every pre-existing row and every call recorded the original way (still the majority — most call sites only ever record success). FAILED rows are new (see fallback.ts's runChain) — a genuinely failed attempt, 0 tokens/credits since nothing was actually generated. */
+  status           AIUsageStatus   @default(SUCCESS)
+  /** Real wall-clock duration of this attempt, in milliseconds. Null for call sites not yet updated to pass it through (additive rollout, not yet universal — see fallback.ts's doc comment). */
+  latencyMs        Int?
 
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
@@ -3382,6 +3395,7 @@ model AIUsageEvent {
 
   @@index([organizationId, createdAt])
   @@index([billingAccountId, provider])
+  @@index([provider, status, createdAt])
 }
 
 // One row per BillingAccount — the real, current AI-credit balance

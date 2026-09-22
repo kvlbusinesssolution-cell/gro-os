@@ -9,6 +9,7 @@ import type { AIProviderAdapter, ProviderStructuredRequest, ProviderTextRequest 
 import type { AIUsageProvider } from "@/generated/prisma/client";
 import { enqueueAIFallbackRetry } from "./fallback-queue";
 import { classifyProviderError } from "./providers/provider-error";
+import { recordAIUsage } from "@/lib/billing/ai-credits";
 
 /**
  * The real provider cascade: paid Gemini first — the org is paying for real
@@ -91,6 +92,8 @@ export interface FallbackTextResult {
   outputTokens: number;
   provider: AIUsageProvider;
   model: string;
+  /** Phase 27: real wall-clock duration of the successful attempt, in milliseconds. Additive — existing callers that don't read this field are unaffected. */
+  latencyMs: number;
 }
 
 export interface FallbackStructuredResult<T> extends FallbackTextResult {
@@ -102,6 +105,25 @@ export interface FallbackQueueContext {
   organizationId?: string;
   agentId?: string;
   context: string;
+}
+
+/**
+ * Phase 27 (real provider-attempt tracking, requirement: provider_attempts/
+ * provider_failure/provider_latency/final_source). Optional and additive —
+ * when given, every individual provider FAILURE in the chain (not just the
+ * final outcome) gets a real AIUsageEvent row (status: FAILED, 0 tokens/
+ * credits, real latencyMs, real classified status from provider-error.ts).
+ * Deliberately does NOT record on success here — every existing call site
+ * already owns its own real recordAIUsage(...) call after a successful
+ * response (see agent-runtime.ts's recordAgentAIUsage and 40+ others);
+ * duplicating that here would double-count real credits. This is a
+ * best-effort rollout, not yet wired into every one of those call sites —
+ * omitting `usage` simply means failures for that call aren't tracked yet,
+ * same as today.
+ */
+export interface FallbackUsageContext {
+  organizationId: string;
+  context?: string;
 }
 
 /**
@@ -131,18 +153,21 @@ async function runChain<R extends { inputTokens: number; outputTokens: number }>
   op: (provider: AIProviderAdapter) => Promise<R>,
   queueOnFailure: (FallbackQueueContext & { req: ProviderTextRequest }) | null,
   requiresWebSearch = false,
-): Promise<{ result: R; provider: AIProviderAdapter }> {
+  usage?: FallbackUsageContext,
+): Promise<{ result: R; provider: AIProviderAdapter; latencyMs: number }> {
   const attempts: { providerId: string; error: string }[] = [];
 
   for (const provider of chainOrderFor(requiresWebSearch)) {
     if (!provider.isConfigured()) continue;
     if (isCoolingDown(provider.id)) continue;
 
+    const attemptStartedAt = Date.now();
     try {
       const result = await op(provider);
       cooldownState.delete(provider.id);
-      return { result, provider };
+      return { result, provider, latencyMs: Date.now() - attemptStartedAt };
     } catch (error) {
+      const latencyMs = Date.now() - attemptStartedAt;
       const state = recordFailure(provider.id, error);
       const message = error instanceof Error ? error.message : String(error);
       attempts.push({ providerId: provider.id, error: message });
@@ -150,6 +175,11 @@ async function runChain<R extends { inputTokens: number; outputTokens: number }>
         `[ai/fallback] ${provider.id} failed (status=${state.status ?? "unknown"}, cooldown=${state.cooldownMs}ms), trying next provider:`,
         message,
       );
+      if (usage) {
+        recordAIUsage(usage.organizationId, provider.id, provider.model, 0, 0, usage.context, "FAILED", latencyMs).catch(() => {
+          // recordAIUsage already logs its own failures internally — never let a tracking failure affect the real fallback loop.
+        });
+      }
     }
   }
 
@@ -174,9 +204,9 @@ async function runChain<R extends { inputTokens: number; outputTokens: number }>
  * every provider in the chain fails, so a full-chain outage degrades to
  * "retried automatically later" instead of a hard, final failure.
  */
-export async function generateText(req: ProviderTextRequest, queue?: FallbackQueueContext): Promise<FallbackTextResult> {
-  const { result, provider } = await runChain((p) => p.generateText(req), queue ? { ...queue, req } : null, !!req.webSearch);
-  return { text: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens, provider: provider.id, model: provider.model };
+export async function generateText(req: ProviderTextRequest, queue?: FallbackQueueContext, usage?: FallbackUsageContext): Promise<FallbackTextResult> {
+  const { result, provider, latencyMs } = await runChain((p) => p.generateText(req), queue ? { ...queue, req } : null, !!req.webSearch, usage);
+  return { text: result.text, inputTokens: result.inputTokens, outputTokens: result.outputTokens, provider: provider.id, model: provider.model, latencyMs };
 }
 
 /**
@@ -186,8 +216,11 @@ export async function generateText(req: ProviderTextRequest, queue?: FallbackQue
  * json-mode.ts). Note: structured requests are not queued for retry on total
  * failure — see fallback-queue.ts's doc comment for why.
  */
-export async function generateStructured<T>(req: ProviderStructuredRequest<T> & { schema: ZodType<T> }): Promise<FallbackStructuredResult<T>> {
-  const { result, provider } = await runChain((p) => p.generateStructured(req), null, !!req.webSearch);
+export async function generateStructured<T>(
+  req: ProviderStructuredRequest<T> & { schema: ZodType<T> },
+  usage?: FallbackUsageContext,
+): Promise<FallbackStructuredResult<T>> {
+  const { result, provider, latencyMs } = await runChain((p) => p.generateStructured(req), null, !!req.webSearch, usage);
   return {
     text: result.text,
     inputTokens: result.inputTokens,
@@ -195,6 +228,7 @@ export async function generateStructured<T>(req: ProviderStructuredRequest<T> & 
     parsed: result.parsed,
     provider: provider.id,
     model: provider.model,
+    latencyMs,
   };
 }
 
