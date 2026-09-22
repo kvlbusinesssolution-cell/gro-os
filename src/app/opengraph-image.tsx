@@ -1,7 +1,19 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { ImageResponse } from "next/og";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
+
+// Satori (next/og's renderer) needs an actual reachable URL or inline data —
+// a bare "/images/..." path won't resolve during image generation, so the
+// real GROOS logo mark is embedded as a base64 data URI read straight off
+// disk, not fetched over the network. This card's background is dark, so
+// the dark-mode mark (public/images/groos-mark-dark.png) is the correct
+// variant here, not a theme toggle — a static OG image can't switch.
+const logoDataUri = `data:image/png;base64,${readFileSync(
+  path.join(process.cwd(), "public/images/groos-mark-dark.png"),
+).toString("base64")}`;
 
 export default async function OpengraphImage() {
   return new ImageResponse(
@@ -20,20 +32,17 @@ export default async function OpengraphImage() {
             "radial-gradient(ellipse 80% 60% at 30% 0%, rgba(16,185,129,0.35), transparent 70%)",
         }}
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            fontSize: 40,
-            fontWeight: 700,
-            backgroundImage:
-              "linear-gradient(100deg, #34d399 0%, #60a5fa 55%, #a78bfa 100%)",
-            backgroundClip: "text",
-            color: "transparent",
-          }}
-        >
-          KVL GrowthOS
+        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+          <img src={logoDataUri} width={56} height={56} alt="" />
+          <div
+            style={{
+              fontSize: 40,
+              fontWeight: 700,
+              color: "#fafafa",
+            }}
+          >
+            GrowthOS
+          </div>
         </div>
         <div
           style={{
