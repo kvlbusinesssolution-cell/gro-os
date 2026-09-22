@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 import { isAIConnected } from "@/lib/ai/client";
 import { generateCompanyIntelligence } from "@/lib/company-intelligence";
 import { scoreCompany } from "@/lib/lead-scoring";
@@ -237,6 +238,16 @@ export async function enrichCompany(companyId: string, options: EnrichCompanyOpt
       status === "FAILED"
         ? { enrichmentStatus: "FAILED", enrichmentFailureReason: errors.join(" | ") || "All enrichment steps failed" }
         : { enrichmentStatus: status, lastEnrichedAt: new Date(), enrichmentFailureReason: null },
+  });
+
+  // Phase 24 (requirement #19, audit trail): the real enrichment-outcome
+  // write, audited. Deliberately NOT logging the earlier RUNNING-status
+  // transition or the domain-backfill above — those are routine
+  // in-progress bookkeeping, not a meaningful outcome worth an audit row.
+  await logAudit({
+    organizationId: company.organizationId,
+    action: "company.enriched",
+    metadata: { companyId, status, stepsCompleted, stepsFailed, factsFound },
   });
 
   console.log(`[enrichment] company ${companyId}: ${status} — completed [${stepsCompleted.join(", ")}], failed [${stepsFailed.join(", ")}], ${factsFound} new fact(s)`);

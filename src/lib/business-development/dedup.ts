@@ -1,4 +1,6 @@
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 import type { Company, CompanySource, CompanyStatus, Contact } from "@/generated/prisma/client";
 
 /**
@@ -16,6 +18,28 @@ export function normalizeWebsiteHost(website: string | null | undefined): string
   } catch {
     return null;
   }
+}
+
+/**
+ * Conservative, deterministic name normalization for the exact-match name
+ * tiers below — strips common legal-entity suffixes (Inc/LLC/Ltd/Pvt/Co/
+ * Corp/etc, with or without trailing punctuation), all punctuation, and
+ * collapses whitespace, then lowercases. Deliberately NOT a fuzzy/similarity
+ * matcher (no Levenshtein/Jaccard scoring) — this only closes the gap where
+ * "Acme Inc." and "Acme, Inc" are obviously the same real company but an
+ * exact string comparison would miss them. A genuinely different company
+ * with a similar-sounding name must still not match.
+ */
+const LEGAL_SUFFIX_RE =
+  /\b(inc|incorporated|llc|ltd|limited|pvt|private|co|corp|corporation|company|plc|llp|gmbh|sa|srl|bv)\b\.?/gi;
+
+export function normalizeCompanyName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(LEGAL_SUFFIX_RE, " ")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 export interface FindOrCreateCompanyInput {
@@ -80,57 +104,98 @@ async function recordRediscovery(company: Company, source: CompanySource): Promi
 export async function findOrCreateCompany(input: FindOrCreateCompanyInput): Promise<FindOrCreateCompanyResult> {
   const normalizedHost = normalizeWebsiteHost(input.website);
 
+  // Tier 1: exact domain match, backed by the real @@unique([organizationId,
+  // domain]) index — a direct indexed lookup, not a full-table scan (Phase
+  // 24 fix; `domain` is already the normalized host, stored at creation
+  // below, so this compares like-for-like without re-deriving it in JS).
+  // `mergedIntoId: null` on every lookup below (Phase 24, requirement #4):
+  // a merged-away Company row must never be "found" as a live match — new
+  // discovery activity always resolves to the real, surviving keeper.
   if (normalizedHost) {
-    const candidates = await prisma.company.findMany({
-      where: { organizationId: input.organizationId, website: { not: null } },
+    const match = await prisma.company.findFirst({
+      where: { organizationId: input.organizationId, domain: normalizedHost, mergedIntoId: null },
     });
-    const match = candidates.find((c) => normalizeWebsiteHost(c.website) === normalizedHost);
     if (match) {
       const company = await recordRediscovery(match, input.source);
       return { company, wasCreated: false };
     }
   }
 
-  if (input.headquartersCountry) {
-    const nameCountryMatch = await prisma.company.findFirst({
-      where: {
-        organizationId: input.organizationId,
-        name: { equals: input.name, mode: "insensitive" },
-        headquartersCountry: { equals: input.headquartersCountry, mode: "insensitive" },
-      },
+  // Tiers 2-3: name matching, normalized (legal-suffix/punctuation/case
+  // insensitive — see normalizeCompanyName) against every company already
+  // in this org. Bounded by organizationId (indexed) the same way tier 1
+  // is — not a cross-org scan.
+  const normalizedTargetName = normalizeCompanyName(input.name);
+  if (normalizedTargetName) {
+    const orgCompanies = await prisma.company.findMany({
+      where: { organizationId: input.organizationId, mergedIntoId: null },
+      select: { id: true, name: true, headquartersCountry: true },
     });
-    if (nameCountryMatch) {
-      const company = await recordRediscovery(nameCountryMatch, input.source);
+
+    if (input.headquartersCountry) {
+      const countryMatch = orgCompanies.find(
+        (c) =>
+          normalizeCompanyName(c.name) === normalizedTargetName &&
+          (c.headquartersCountry ?? "").toLowerCase() === input.headquartersCountry!.toLowerCase(),
+      );
+      if (countryMatch) {
+        const full = await prisma.company.findUniqueOrThrow({ where: { id: countryMatch.id } });
+        const company = await recordRediscovery(full, input.source);
+        return { company, wasCreated: false };
+      }
+    }
+
+    const nameMatch = orgCompanies.find((c) => normalizeCompanyName(c.name) === normalizedTargetName);
+    if (nameMatch) {
+      const full = await prisma.company.findUniqueOrThrow({ where: { id: nameMatch.id } });
+      const company = await recordRediscovery(full, input.source);
       return { company, wasCreated: false };
     }
   }
 
-  const nameMatch = await prisma.company.findFirst({
-    where: { organizationId: input.organizationId, name: { equals: input.name, mode: "insensitive" } },
-  });
-  if (nameMatch) {
-    const company = await recordRediscovery(nameMatch, input.source);
-    return { company, wasCreated: false };
-  }
+  const createData = {
+    organizationId: input.organizationId,
+    name: input.name,
+    website: input.website || null,
+    domain: normalizedHost,
+    industry: input.industry || null,
+    email: input.email || null,
+    phone: input.phone || null,
+    notes: input.notes || null,
+    source: input.source,
+    status: input.status,
+    sourceCount: 1,
+    discoverySources: [input.source],
+    lastDiscoveredAt: new Date(),
+  };
 
-  const company = await prisma.company.create({
-    data: {
+  try {
+    const company = await prisma.company.create({ data: createData });
+    await logAudit({
       organizationId: input.organizationId,
-      name: input.name,
-      website: input.website || null,
-      domain: normalizedHost,
-      industry: input.industry || null,
-      email: input.email || null,
-      phone: input.phone || null,
-      notes: input.notes || null,
-      source: input.source,
-      status: input.status,
-      sourceCount: 1,
-      discoverySources: [input.source],
-      lastDiscoveredAt: new Date(),
-    },
-  });
-  return { company, wasCreated: true };
+      action: "company.created",
+      metadata: { companyId: company.id, name: company.name, domain: company.domain, source: input.source },
+    });
+    return { company, wasCreated: true };
+  } catch (error) {
+    // Phase 24 (requirement #18, retry safety): a real concurrent call — or
+    // a retried job racing the original — can lose the check-then-create
+    // race despite the tier-1 read above finding no match at the time. The
+    // real @@unique([organizationId, domain]) constraint is the actual
+    // safety net; P2002 here means another caller won it first, so re-read
+    // and return that row instead of surfacing a raw constraint-violation
+    // error to the caller.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && normalizedHost) {
+      const winner = await prisma.company.findFirst({
+        where: { organizationId: input.organizationId, domain: normalizedHost, mergedIntoId: null },
+      });
+      if (winner) {
+        const company = await recordRediscovery(winner, input.source);
+        return { company, wasCreated: false };
+      }
+    }
+    throw error;
+  }
 }
 
 export interface FindOrCreateContactInput {

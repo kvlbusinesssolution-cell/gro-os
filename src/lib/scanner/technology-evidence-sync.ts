@@ -96,6 +96,9 @@ export async function syncCompanyTechnologiesFromScan(companyId: string, website
         fact,
         source: "WEBSITE_SCAN" as const,
         sourceUrl,
+        // Phase 24 (requirement #5): this evidence directly supports
+        // Company.technologies specifically, not a generic company fact.
+        fieldName: "technologies",
         confidence: confidenceForEvidence(tech.evidence),
       })),
     });

@@ -122,7 +122,20 @@ export async function globalSearch(organizationId: string, query: string): Promi
       take: RESULT_LIMIT_PER_KIND,
     }),
     prisma.company.findMany({
-      where: { organizationId, OR: [{ name: { contains: q, mode: "insensitive" } }, { industry: { contains: q, mode: "insensitive" } }] },
+      // Phase 24 (requirement #13, searchability): domain/website added —
+      // a user searching "acme.com" previously never matched a company
+      // whose name doesn't literally contain that string, even though
+      // domain is often the more reliable real-world search key for a B2B
+      // data tool.
+      where: {
+        organizationId,
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { industry: { contains: q, mode: "insensitive" } },
+          { domain: { contains: q, mode: "insensitive" } },
+          { website: { contains: q, mode: "insensitive" } },
+        ],
+      },
       take: RESULT_LIMIT_PER_KIND,
       orderBy: { createdAt: "desc" },
     }),

@@ -1596,6 +1596,44 @@ model Company {
   ownerUserId         String?
   priority            MessagePriority @default(NORMAL)
 
+  // ===== Phase 24 (Enterprise Company Data Intelligence) — additive identity
+  // fields the spec explicitly asked for. Null until a real source supplies
+  // them — never guessed/inferred as a fact. `parentCompanyId` is a plain
+  // self-relation (no cycle-prevention beyond app-level checks, matching
+  // this schema's existing convention for other nullable self/optional FKs).
+  subindustry        String?
+  region             String?
+  fundingDate        DateTime?
+  parentCompanyId    String?
+  parentCompany      Company?  @relation("CompanyParent", fields: [parentCompanyId], references: [id], onDelete: SetNull)
+  subsidiaries       Company[] @relation("CompanyParent")
+  // Registered legal entity name, when it differs from the working/trade
+  // name already in `name` (e.g. "Acme Inc." vs "Acme Technologies Pvt
+  // Ltd") — null until a real source (registry lookup, manual entry)
+  // supplies it.
+  legalName          String?
+  // Distinct from the generic `growthRate` (revenue/business growth) —
+  // specifically headcount trend, e.g. from a LinkedIn employee-count
+  // delta. Null, never inferred from a single snapshot.
+  employeeGrowthRate Float?
+  // A real source-reported range (e.g. "$10M-$50M" bucket), kept separate
+  // from the single-point `estimatedRevenue` estimate above — both may be
+  // null, both may be set, they're not required to agree.
+  revenueMin         Float?
+  revenueMax         Float?
+  // Alternate/former/trading names a real source has reported for this
+  // company (e.g. a rebrand, a DBA name) — used to widen duplicate
+  // detection, never auto-populated by guessing string similarity.
+  companyAliases     String[]  @default([])
+
+  // Company-merge safety (Phase 24, requirement #4): a merged-away Company
+  // row is NEVER deleted (audit/history preservation) — it's flagged here
+  // and redirected. See src/lib/business-development/company-merge.ts.
+  mergedIntoId String?
+  mergedAt     DateTime?
+  mergedInto   Company?  @relation("CompanyMerge", fields: [mergedIntoId], references: [id], onDelete: SetNull)
+  mergedFrom   Company[] @relation("CompanyMerge")
+
   // ===== Discovery-source tracking (Phase 1 AI Business Development System) =====
   // `source` above stays the ORIGINAL discovery source only. These track every
   // re-discovery of this same Company over time, e.g. found first by Lead
@@ -1680,8 +1718,21 @@ model Company {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // Phase 24 (requirement #18, retry safety): a real DB-level uniqueness
+  // guarantee behind findOrCreateCompany — without this, two concurrent
+  // discovery calls can both pass the "no existing match" read and both
+  // insert a real duplicate Company row for the same company. Postgres
+  // treats every NULL domain as distinct from every other NULL (standard
+  // SQL NULL semantics), so companies with no known domain are correctly
+  // NOT deduped against each other by this constraint — only a genuine,
+  // known, shared domain within the same org is rejected. A UNIQUE
+  // constraint also serves as the index, so this replaces the plain
+  // @@index the previous partial change added.
+  @@unique([organizationId, domain])
   @@index([organizationId])
   @@index([referralPartnerId])
+  @@index([parentCompanyId])
+  @@index([mergedIntoId])
 }
 
 enum ClientStatus {
@@ -4301,20 +4352,38 @@ enum EvidenceSource {
 // conversion improvement opportunity"), so downstream UI never presents an
 // inference as an observed fact.
 model CompanyEvidence {
-  id                 String         @id @default(cuid())
+  id                 String                     @id @default(cuid())
   companyId          String
   kind               EvidenceKind
-  fact               String         @db.Text
+  fact               String                     @db.Text
   source             EvidenceSource
   sourceUrl          String?
   confidence         Float
-  discoveredAt       DateTime       @default(now())
+  discoveredAt       DateTime                   @default(now())
   generatedByAgentId String?
+  // Phase 24 (requirement #5, evidence per field): which specific Company
+  // scalar field this evidence supports (e.g. "employeeCount",
+  // "estimatedRevenue") — lets a specific field's evidence trail actually
+  // be queried, not just "some evidence exists for this company somewhere".
+  // Null on every row written before this column existed — deliberately
+  // NOT backfilled (an honest unknown, never a guess) — and null is also
+  // valid going forward for evidence that doesn't map to one scalar field.
+  fieldName          String?
+  // Phase 24 (requirement #10, verification status): has a real human
+  // explicitly confirmed this fact? Only a real user action can move this
+  // to USER_VERIFIED — never set by AI output or a background job.
+  verificationStatus EvidenceVerificationStatus @default(UNVERIFIED)
 
   company          Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   generatedByAgent AIAgentInstance? @relation(fields: [generatedByAgentId], references: [id], onDelete: SetNull)
 
   @@index([companyId])
+  @@index([companyId, fieldName])
+}
+
+enum EvidenceVerificationStatus {
+  UNVERIFIED
+  USER_VERIFIED
 }
 
 // Phase 3: Decision Maker Intelligence — the most relevant PUBLICLY
@@ -10719,11 +10788,11 @@ enum AgentRunStatus {
 }
 
 model AgentRun {
-  id             String @id @default(cuid())
+  id             String  @id @default(cuid())
   organizationId String
   userId         String?
 
-  domain AgentDomain
+  domain   AgentDomain
   // Stable string key identifying which real function executed this run
   // (e.g. "career-agent-chat", "career-resume-customization",
   // "executive-agent-turn:SALES") — deliberately NOT a foreign key to
@@ -10739,12 +10808,12 @@ model AgentRun {
   // email body, etc). The real content already lives in its own real model
   // (CareerResume, ApplicationDocument, EmailDraft, ...); this is a
   // governance trace, not a second copy.
-  inputSummary  String @db.Text
+  inputSummary  String  @db.Text
   outputSummary String? @db.Text
 
-  status     AgentRunStatus @default(REQUESTED)
-  confidence Float?
-  errorMessage String? @db.Text
+  status       AgentRunStatus @default(REQUESTED)
+  confidence   Float?
+  errorMessage String?        @db.Text
 
   startedAt   DateTime  @default(now())
   completedAt DateTime?

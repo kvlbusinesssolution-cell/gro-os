@@ -192,6 +192,13 @@ export async function updateCompany(companyId: string, input: CompanyInput): Pro
 
   const membership = await resolveActiveMembership(userId);
   if (!membership) return { ok: false, error: "You don't belong to an organization yet." };
+  // Phase 24 (requirement #12, RBAC): the same OWNER/ADMIN bar deleteCompany
+  // already enforces below — its own comment ("same bar as editing the org
+  // profile") already implied this should apply here too, but no check
+  // actually existed until now.
+  if (!EDITOR_ROLES.has(membership.role)) {
+    return { ok: false, error: "Only owners and admins can edit companies." };
+  }
 
   try {
     const existing = await prisma.company.findUnique({ where: { id: companyId } });
