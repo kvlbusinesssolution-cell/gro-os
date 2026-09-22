@@ -7,6 +7,7 @@ import { Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { formatCurrency } from "../../../_lib/format";
 import { deleteExpenseEntry } from "../actions";
 
 const CATEGORY_VARIANT: Record<string, "outline" | "accent" | "default" | "secondary"> = {
@@ -23,7 +24,7 @@ export interface ExpenseRow {
   description: string | null;
 }
 
-export function ExpenseList({ expenses, formatAmount }: { expenses: ExpenseRow[]; formatAmount: (amount: number) => string }) {
+export function ExpenseList({ expenses, currency }: { expenses: ExpenseRow[]; currency?: string | null }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
 
@@ -39,7 +40,7 @@ export function ExpenseList({ expenses, formatAmount }: { expenses: ExpenseRow[]
             <div className="flex items-center gap-3">
               <Badge variant={CATEGORY_VARIANT[e.category] ?? "outline"}>{e.category}</Badge>
               <div>
-                <p className="font-medium text-foreground">{formatAmount(e.amount)}</p>
+                <p className="font-medium text-foreground">{formatCurrency(e.amount, currency)}</p>
                 <p className="text-xs text-muted-foreground">
                   {e.incurredOn.toLocaleDateString()}
                   {e.description ? ` · ${e.description}` : ""}

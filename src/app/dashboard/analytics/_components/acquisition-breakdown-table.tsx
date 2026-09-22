@@ -5,13 +5,21 @@ import { ArrowUpDown } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Table, TableHeader, TableRow, TableHead, TableBody, TableCell } from "@/components/ui/table";
+import { formatCurrency } from "../../_lib/format";
 import { filterBreakdownRows, sortBreakdownRows } from "../_lib/acquisition-display";
 
 export interface BreakdownColumn<Row> {
   key: keyof Row;
   label: string;
   align?: "right";
-  format?: (row: Row) => string;
+  /**
+   * A serializable format kind, not a function — this component is
+   * "use client", so a `(row: Row) => string` prop passed from the
+   * Server Component page.tsx would fail RSC serialization ("Functions
+   * cannot be passed directly to Client Components"). Add new kinds here
+   * as needed rather than reintroducing a function prop.
+   */
+  format?: "currency";
 }
 
 interface AcquisitionBreakdownTableProps<Row extends Record<string, unknown>> {
@@ -23,6 +31,8 @@ interface AcquisitionBreakdownTableProps<Row extends Record<string, unknown>> {
   filterKey: keyof Row;
   defaultSortKey: keyof Row;
   emptyMessage: string;
+  /** Required only when a column uses `format: "currency"`. */
+  currency?: string | null;
 }
 
 /**
@@ -42,6 +52,7 @@ export function AcquisitionBreakdownTable<Row extends Record<string, unknown>>({
   filterKey,
   defaultSortKey,
   emptyMessage,
+  currency,
 }: AcquisitionBreakdownTableProps<Row>) {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<keyof Row>(defaultSortKey);
@@ -104,7 +115,9 @@ export function AcquisitionBreakdownTable<Row extends Record<string, unknown>>({
                   <TableRow key={String(row[filterKey])}>
                     {columns.map((col) => (
                       <TableCell key={String(col.key)} className={col.align === "right" ? "text-right" : undefined}>
-                        {col.format ? col.format(row) : String(row[col.key] ?? "")}
+                        {col.format === "currency"
+                          ? formatCurrency(Number(row[col.key] ?? 0), currency)
+                          : String(row[col.key] ?? "")}
                       </TableCell>
                     ))}
                   </TableRow>

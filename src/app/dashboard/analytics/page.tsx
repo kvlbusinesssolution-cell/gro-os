@@ -879,6 +879,7 @@ export default async function AnalyticsPage({
             <CardContent>
               <AcquisitionBreakdownTable
                 title="By source"
+                currency={currency}
                 rows={acquisitionOverview.bySource.map((r) => ({ ...r, sourceLabel: COMPANY_SOURCE_LABEL[r.source as keyof typeof COMPANY_SOURCE_LABEL] ?? r.source }))}
                 filterKey="sourceLabel"
                 defaultSortKey="revenue"
@@ -891,7 +892,7 @@ export default async function AnalyticsPage({
                   { key: "meetings", label: "Meetings", align: "right" },
                   { key: "proposals", label: "Proposals", align: "right" },
                   { key: "wonDeals", label: "Won", align: "right" },
-                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                  { key: "revenue", label: "Revenue", align: "right", format: "currency" },
                 ]}
               />
             </CardContent>
@@ -905,6 +906,7 @@ export default async function AnalyticsPage({
             <CardContent>
               <AcquisitionBreakdownTable
                 title="By industry"
+                currency={currency}
                 rows={acquisitionOverview.byIndustry}
                 filterKey="industry"
                 defaultSortKey="revenue"
@@ -913,7 +915,7 @@ export default async function AnalyticsPage({
                   { key: "industry", label: "Industry" },
                   { key: "companies", label: "Companies", align: "right" },
                   { key: "wonDeals", label: "Won", align: "right" },
-                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                  { key: "revenue", label: "Revenue", align: "right", format: "currency" },
                 ]}
               />
             </CardContent>
@@ -927,6 +929,7 @@ export default async function AnalyticsPage({
             <CardContent>
               <AcquisitionBreakdownTable
                 title="By country"
+                currency={currency}
                 rows={acquisitionOverview.byCountry}
                 filterKey="country"
                 defaultSortKey="revenue"
@@ -935,7 +938,7 @@ export default async function AnalyticsPage({
                   { key: "country", label: "Country" },
                   { key: "companies", label: "Companies", align: "right" },
                   { key: "wonDeals", label: "Won", align: "right" },
-                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                  { key: "revenue", label: "Revenue", align: "right", format: "currency" },
                 ]}
               />
             </CardContent>
@@ -949,6 +952,7 @@ export default async function AnalyticsPage({
             <CardContent>
               <AcquisitionBreakdownTable
                 title="By service"
+                currency={currency}
                 rows={acquisitionOverview.byService}
                 filterKey="service"
                 defaultSortKey="revenue"
@@ -957,7 +961,7 @@ export default async function AnalyticsPage({
                   { key: "service", label: "Service" },
                   { key: "opportunities", label: "Opps", align: "right" },
                   { key: "wonDeals", label: "Won", align: "right" },
-                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                  { key: "revenue", label: "Revenue", align: "right", format: "currency" },
                 ]}
               />
             </CardContent>
@@ -971,6 +975,7 @@ export default async function AnalyticsPage({
             <CardContent>
               <AcquisitionBreakdownTable
                 title="By campaign"
+                currency={currency}
                 rows={acquisitionOverview.byCampaign.map((r) => ({ ...r }))}
                 filterKey="campaignName"
                 defaultSortKey="revenue"
@@ -982,7 +987,7 @@ export default async function AnalyticsPage({
                   { key: "replies", label: "Replies", align: "right" },
                   { key: "meetings", label: "Meetings", align: "right" },
                   { key: "wonDeals", label: "Won", align: "right" },
-                  { key: "revenue", label: "Revenue", align: "right", format: (r) => formatCurrency(r.revenue, currency) },
+                  { key: "revenue", label: "Revenue", align: "right", format: "currency" },
                 ]}
               />
             </CardContent>

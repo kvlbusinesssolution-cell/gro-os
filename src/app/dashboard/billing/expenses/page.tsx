@@ -1,6 +1,5 @@
 import { Container } from "@/components/ui/container";
 import { prisma } from "@/lib/prisma";
-import { formatCurrency } from "../../_lib/format";
 import { requireActiveMembership } from "../../_lib/require-membership";
 import { ExpenseForm } from "./_components/expense-form";
 import { ExpenseList } from "./_components/expense-list";
@@ -30,7 +29,7 @@ export default async function ExpensesPage() {
 
         <ExpenseList
           expenses={expenses.map((e) => ({ id: e.id, category: e.category, amount: e.amount, incurredOn: e.incurredOn, description: e.description }))}
-          formatAmount={(amount) => formatCurrency(amount, currency)}
+          currency={currency}
         />
       </Container>
     </main>
