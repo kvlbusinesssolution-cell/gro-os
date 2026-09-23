@@ -80,8 +80,17 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # pdfkit is excluded from the standalone trace (serverExternalPackages in
 # next.config.ts — it reads .afm font files from disk via native `require`,
 # which tracing/bundling would break) so its real package files must be
-# copied in explicitly, not just relied on the standalone trace.
+# copied in explicitly, not just relied on the standalone trace. fontkit
+# (a pdfkit dependency, also used directly by the CV Builder for real glyph-
+# coverage checks) gets the same explicit copy for the same reason.
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/pdfkit ./node_modules/pdfkit
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/fontkit ./node_modules/fontkit
+
+# Same reason as pdfkit above: the CV Builder's embedded Unicode font
+# (src/lib/career/cv-pdf-renderer.ts) is read from disk at runtime via
+# fs.readFile(path.join(process.cwd(), ...)), not imported as a JS module —
+# standalone tracing never sees it, so it must be copied explicitly too.
+COPY --from=builder --chown=nextjs:nodejs /app/assets ./assets
 
 # Real uploaded-document storage (docker-compose.yml mounts a named volume
 # at /app/storage/documents). Docker only inherits ownership/permissions

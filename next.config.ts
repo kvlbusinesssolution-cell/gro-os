@@ -7,7 +7,12 @@ const nextConfig: NextConfig = {
   // directory at runtime (native Node.js `fs`/`__dirname` usage) — bundling
   // it rewrites those paths and breaks font loading, so it must run via
   // native `require` instead. See src/lib/export/pdf.ts.
-  serverExternalPackages: ["pdfkit"],
+  // fontkit: same bundler-interference reason as pdfkit below — its
+  // package.json "exports" map resolves to a browser build without real
+  // filesystem access unless left external to Node's own CJS resolution
+  // (src/lib/career/cv-pdf-renderer.ts also forces this via createRequire
+  // for Vitest, which doesn't read this Next.js-specific config).
+  serverExternalPackages: ["pdfkit", "fontkit"],
 
   // Required for the multi-stage Docker build (Dockerfile) — copies only
   // the traced production dependency subset + server bundle into the

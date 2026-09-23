@@ -214,6 +214,17 @@ export default async function CareerDashboardPage() {
                 </Link>
               </CardContent>
             </Card>
+            <Card glass>
+              <CardContent className="flex items-center justify-between gap-3 p-5">
+                <div>
+                  <p className="text-sm font-medium text-foreground">CV Builder</p>
+                  <p className="text-xs text-muted-foreground">Build a professional CV from a template, in any of 28 real supported languages.</p>
+                </div>
+                <Link href="/dashboard/career/cv-builder" className="text-sm font-medium text-primary hover:underline">
+                  Build CV →
+                </Link>
+              </CardContent>
+            </Card>
           </div>
         )}
       </Container>

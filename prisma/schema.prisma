@@ -9990,6 +9990,7 @@ model CareerProfile {
   applications JobApplication[]
   interviews   CareerInterview[]
   followUps    CareerFollowUp[]
+  builtCVs     CareerCV[]
 
   @@index([userId])
   @@index([organizationId])
@@ -9998,6 +9999,57 @@ model CareerProfile {
 enum CareerProfileStatus {
   ACTIVE
   ARCHIVED
+}
+
+// Phase 35 — CV Builder. Distinct from CareerResume (an UPLOADED file this
+// app parses) and ApplicationDocument (a per-application AI-customized
+// COPY): a CareerCV is authored from scratch (or pre-filled from
+// CareerProfile) directly in this app's structured editor, independent of
+// any single application, and can exist in multiple real, independently
+// generated language variants of the same underlying content.
+model CareerCV {
+  id              String @id @default(cuid())
+  careerProfileId String
+
+  title    String
+  // Real, verified-renderable language code — see CV_LANGUAGES in
+  // src/lib/validations/career-cv.ts. Never a bare "any language" claim:
+  // only languages this app's embedded font can actually shape correctly
+  // are accepted (see cv-pdf-renderer.ts's real glyph-coverage check).
+  language     String
+  templateKey  CareerCVTemplate @default(CLASSIC)
+  // CVContent (src/lib/validations/career-cv.ts) — personal info, summary,
+  // experience, education, skills, certifications, languagesSpoken,
+  // projects. Independent of CareerProfile's own fields — editing a CV here
+  // never writes back to the profile.
+  content      Json
+
+  // Set once generatePdf() actually renders a real file to storage; null
+  // means "content saved, no PDF generated yet" (a real, distinct state,
+  // never a stale/guessed download).
+  storageKey   String?
+  generatedAt  DateTime?
+
+  // Set only when this CV was created via a real AI translation of another
+  // CareerCV (§ translateCV) — never set for a from-scratch/manually-edited
+  // CV, so the UI can honestly label "AI-translated from <source>" instead
+  // of implying the user wrote it directly in this language.
+  translatedFromId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  careerProfile  CareerProfile @relation(fields: [careerProfileId], references: [id], onDelete: Cascade)
+  translatedFrom CareerCV?     @relation("CVTranslations", fields: [translatedFromId], references: [id], onDelete: SetNull)
+  translations   CareerCV[]    @relation("CVTranslations")
+
+  @@index([careerProfileId])
+}
+
+enum CareerCVTemplate {
+  CLASSIC
+  MODERN
+  MINIMAL
 }
 
 enum CareerWorkMode {
