@@ -135,6 +135,45 @@ describe("application orchestrator — real end-to-end pipeline + tenant isolati
     expect(count).toBe(1);
   });
 
+  it("two genuinely concurrent prepare calls for the same job never both create a row — the real P2002 race is caught and re-read, never an unhandled error (§51 retry safety)", async () => {
+    const raceJob = await prisma.job.create({
+      data: { title: "Race Condition Test Role", sourceTitle: "Race Condition Test Role", company: "Race Corp", description: "Real fixture for a concurrent-create race test.", technologies: ["React"] },
+    });
+    const raceJobMatch = await prisma.jobMatch.create({
+      data: {
+        careerProfileId: profileId,
+        jobId: raceJob.id,
+        organizationId: orgAId,
+        overallScore: 80,
+        dimensions: { skill: { status: "MATCHED", evidence: [] }, experience: { status: "MATCHED", evidence: [] }, role: { status: "MATCHED", evidence: [] }, industry: { status: "UNKNOWN", evidence: [] }, location: { status: "MATCHED", evidence: [] }, salary: { status: "UNKNOWN", evidence: [] }, technology: { status: "MATCHED", evidence: [] }, careerLevel: { status: "UNKNOWN", evidence: [] }, preference: { status: "UNKNOWN", evidence: [] } },
+        eligibility: "LIKELY_ELIGIBLE",
+        status: "MATCHED",
+      },
+    });
+
+    // Two real, genuinely-concurrent calls — both will pass
+    // checkDuplicateApplication's read (no row exists yet) before either
+    // commits its create(), reproducing the real race the P2002 catch
+    // exists to handle.
+    const [resultA, resultB] = await Promise.all([
+      prepareApplicationCore(profileId, raceJobMatch.id, orgAId, userAId),
+      prepareApplicationCore(profileId, raceJobMatch.id, orgAId, userAId),
+    ]);
+
+    expect(resultA.ok).toBe(true);
+    expect(resultB.ok).toBe(true);
+    // Both calls must resolve to the SAME real application id — neither
+    // silently drops the caller, neither throws a raw constraint error.
+    expect(resultA.applicationId).toBe(resultB.applicationId);
+
+    const count = await prisma.jobApplication.count({ where: { careerProfileId: profileId, jobId: raceJob.id } });
+    expect(count).toBe(1);
+
+    await prisma.jobApplication.deleteMany({ where: { jobId: raceJob.id } });
+    await prisma.jobMatch.deleteMany({ where: { jobId: raceJob.id } });
+    await prisma.job.deleteMany({ where: { id: raceJob.id } });
+  });
+
   it("submitApplicationCore requires USER approval under the real DISCOVERY_ONLY default automation mode — never auto-submits (§19)", async () => {
     const application = await prisma.jobApplication.findFirstOrThrow({ where: { careerProfileId: profileId, jobId } });
     const result = await submitApplicationCore(application.id, userAId);

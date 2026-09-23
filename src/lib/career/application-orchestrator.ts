@@ -10,6 +10,7 @@
  * never silently skipped, never guessed.
  */
 
+import { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { notifyUser } from "@/lib/notifications";
@@ -74,21 +75,37 @@ export async function prepareApplicationCore(careerProfileId: string, jobMatchId
   // very application currently being prepared.
   const matchPrediction = await predictMatchResponseLikelihood(organizationId, jobMatch.id);
 
-  const application = await prisma.jobApplication.create({
-    data: {
-      organizationId,
-      userId,
-      careerProfileId,
-      jobId: job.id,
-      jobMatchId: jobMatch.id,
-      status: "DISCOVERED",
-      automationModeAtCreation: profile.applicationAutomationMode,
-      duplicateStatus: duplicate.status,
-      suspicionStatus: suspicion.status,
-      suspicionEvidence: suspicion.evidence,
-      matchPrediction: matchPrediction as unknown as object,
-    },
-  });
+  let application;
+  try {
+    application = await prisma.jobApplication.create({
+      data: {
+        organizationId,
+        userId,
+        careerProfileId,
+        jobId: job.id,
+        jobMatchId: jobMatch.id,
+        status: "DISCOVERED",
+        automationModeAtCreation: profile.applicationAutomationMode,
+        duplicateStatus: duplicate.status,
+        suspicionStatus: suspicion.status,
+        suspicionEvidence: suspicion.evidence,
+        matchPrediction: matchPrediction as unknown as object,
+      },
+    });
+  } catch (error) {
+    // Real P2002-catch-and-reread pattern (same as dedup.ts's
+    // findOrCreateCompany/findOrCreateContact) — the checkDuplicateApplication
+    // read above and this create() aren't atomic, so a genuine concurrent
+    // call can lose the check-then-create race despite finding no
+    // duplicate at read time. The real @@unique([careerProfileId, jobId])
+    // constraint is the actual safety net; re-read and return the
+    // winner's row instead of surfacing a raw constraint-violation error.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      const winner = await prisma.jobApplication.findUnique({ where: { careerProfileId_jobId: { careerProfileId, jobId: job.id } } });
+      if (winner) return { ok: true, applicationId: winner.id, status: "DUPLICATE" };
+    }
+    throw error;
+  }
   await logAudit({ userId, organizationId, action: "career:application:discovered", metadata: { applicationId: application.id, jobId: job.id, duplicateStatus: duplicate.status } });
 
   if (duplicate.status === "DUPLICATE_CONFIRMED") {
