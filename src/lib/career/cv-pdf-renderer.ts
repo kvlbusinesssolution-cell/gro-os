@@ -181,8 +181,16 @@ function renderClassic(doc: PDFKit.PDFDocument, content: CVContent): void {
 const SIDEBAR_WIDTH = 175;
 
 function renderModern(doc: PDFKit.PDFDocument, content: CVContent): void {
-  const pageHeight = doc.page.height;
-  doc.rect(0, 0, SIDEBAR_WIDTH, pageHeight).fill("#1f4b43");
+  // Repainted on every auto-paginated page, not just the first — sidebar
+  // text (white/light colors, hardcoded throughout below) would otherwise
+  // render invisibly on page 2+'s default white background once content
+  // overflows a single page. `doc` is a fresh instance per renderCVToPdf()
+  // call, so this listener never leaks across CVs/templates.
+  function paintSidebar() {
+    doc.rect(0, 0, SIDEBAR_WIDTH, doc.page.height).fill("#1f4b43");
+  }
+  paintSidebar();
+  doc.on("pageAdded", paintSidebar);
 
   const sideX = 24;
   const sideWidth = SIDEBAR_WIDTH - 48;

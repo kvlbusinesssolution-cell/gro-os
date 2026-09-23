@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { matchesWholeWord } from "@/lib/business-development/contact-classification";
 
 /**
  * Phase 21 (§4) — real, deterministic Email → Application matching.
@@ -65,8 +66,10 @@ async function disambiguateByJobSignals(applicationIds: string[], signals: Disam
   const company = signals.company?.toLowerCase().trim();
   const role = signals.role?.toLowerCase().trim();
   const matches = applications.filter((app) => {
-    const companyMatches = company ? app.job.company.toLowerCase().includes(company) || company.includes(app.job.company.toLowerCase()) : false;
-    const roleMatches = role ? app.job.title.toLowerCase().includes(role) || role.includes(app.job.title.toLowerCase()) : false;
+    const jobCompany = app.job.company.toLowerCase();
+    const jobTitle = app.job.title.toLowerCase();
+    const companyMatches = company ? matchesWholeWord(jobCompany, company) || matchesWholeWord(company, jobCompany) : false;
+    const roleMatches = role ? matchesWholeWord(jobTitle, role) || matchesWholeWord(role, jobTitle) : false;
     return companyMatches || roleMatches;
   });
   return matches.length === 1 ? matches[0].id : null;

@@ -70,10 +70,32 @@ export async function mergeContacts(
       reassignedCounts.voiceConsent = updated.count;
     }
 
+    // ---- CampaignContact: @@unique([campaignId, contactId]) — same
+    // collision risk as VoiceConsent above, but per-campaign rather than a
+    // single global unique, since the merge-away contact can be enrolled in
+    // several campaigns. For each of its enrollments, drop it if the keeper
+    // is already enrolled in that same campaign, otherwise reassign it.
+    const mergeAwayEnrollments = await tx.campaignContact.findMany({ where: { contactId: mergeAwayId } });
+    let campaignContactReassigned = 0;
+    let campaignContactDropped = 0;
+    for (const enrollment of mergeAwayEnrollments) {
+      const keeperHasEnrollment = await tx.campaignContact.findUnique({
+        where: { campaignId_contactId: { campaignId: enrollment.campaignId, contactId: keepId } },
+      });
+      if (keeperHasEnrollment) {
+        await tx.campaignContact.delete({ where: { id: enrollment.id } });
+        campaignContactDropped++;
+      } else {
+        await tx.campaignContact.update({ where: { id: enrollment.id }, data: { contactId: keepId } });
+        campaignContactReassigned++;
+      }
+    }
+    reassignedCounts.campaignContact = campaignContactReassigned;
+    if (campaignContactDropped) reassignedCounts.campaignContact_dropped_duplicate = campaignContactDropped;
+
     // ---- Every other real relation pointing at Contact (plain, non-unique
     // child records) — straightforward bulk reassignment.
     const plainContactIdModels = [
-      "campaignContact",
       "emailDraft",
       "reply",
       "outreachMeeting",

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { findOrCreateContact } from "@/lib/business-development/dedup";
 import { generateProposalSections } from "@/lib/ai/document-engine";
 import { generateTrackingToken, renderDocumentToPdf, renderDocumentToDocx } from "@/lib/documents";
 import { saveDocumentFile } from "@/lib/storage/documents";
@@ -81,16 +82,19 @@ export const BUSINESS_EXECUTORS: NodeExecutorMap = {
         if (!company || company.organizationId !== context.organizationId) throw new Error(`CRM create_contact: company "${companyId}" was not found in this organization.`);
       }
 
-      const contact = await prisma.contact.create({
-        data: {
-          organizationId: context.organizationId,
-          firstName,
-          lastName: typeof config.lastName === "string" ? config.lastName : null,
-          email,
-          companyId,
-          phone: typeof config.phone === "string" ? config.phone : null,
-          jobTitle: typeof config.jobTitle === "string" ? config.jobTitle : null,
-        },
+      // Routed through the real single choke point (dedup.ts) instead of a
+      // direct create() — the real @@unique([organizationId, email])
+      // constraint (Phase 25) means a workflow that runs (or retries)
+      // concurrently for the same email now needs findOrCreateContact's
+      // real P2002-catch-and-reread handling instead of an unhandled crash.
+      const { contact } = await findOrCreateContact({
+        organizationId: context.organizationId,
+        firstName,
+        lastName: typeof config.lastName === "string" ? config.lastName : null,
+        email,
+        companyId,
+        phone: typeof config.phone === "string" ? config.phone : null,
+        jobTitle: typeof config.jobTitle === "string" ? config.jobTitle : null,
       });
       return { output: { contactId: contact.id } };
     }

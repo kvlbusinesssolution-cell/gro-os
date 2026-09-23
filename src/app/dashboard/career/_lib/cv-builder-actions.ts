@@ -43,6 +43,19 @@ export async function listCVsAction(careerProfileId: string): Promise<ListCVsRes
   return { ok: true, cvs };
 }
 
+/** Profile links (career.ts validation) never require a protocol — falls back to prefixing https:// before parsing, and to the raw string if it's still not a valid URL, rather than throwing. */
+function urlHostnameLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    try {
+      return new URL(`https://${url}`).hostname.replace(/^www\./, "");
+    } catch {
+      return url;
+    }
+  }
+}
+
 /** Real starting point for a new CV — pre-fills from the profile's own real, already-collected structured data (never fabricated), never auto-saved: the user still reviews/edits and explicitly creates. */
 export async function prefillCVFromProfileAction(careerProfileId: string): Promise<ActionResult & { content?: unknown }> {
   const session = await auth();
@@ -63,7 +76,7 @@ export async function prefillCVFromProfileAction(careerProfileId: string): Promi
       location: profile.location ?? "",
       links: [profile.portfolioUrl, profile.githubUrl, profile.linkedinUrl, profile.websiteUrl]
         .filter((url): url is string => Boolean(url))
-        .map((url) => ({ label: new URL(url).hostname.replace(/^www\./, ""), url })),
+        .map((url) => ({ label: urlHostnameLabel(url), url })),
     },
     experience: [],
     education: Array.isArray(profile.education) ? profile.education : [],

@@ -132,7 +132,7 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
       if (extraction.parsed.email) {
         // Phase 25 (dedup-bypass fix): routed through the real single
         // choke point instead of a direct prisma.contact.create().
-        const { contact } = await findOrCreateContact({
+        const { contact, wasCreated } = await findOrCreateContact({
           organizationId: company.organizationId,
           companyId: company.id,
           firstName,
@@ -161,7 +161,7 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
           },
         });
 
-        return { contactId: contact.id, created: true, emailSource: "found" };
+        return { contactId: contact.id, created: wasCreated, emailSource: "found" };
       }
     } catch (error) {
       console.error(`[business-development/decision-maker-outreach] email search failed for decision-maker ${decisionMakerId}:`, error);
@@ -176,7 +176,7 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
   // personal email now correctly share one Contact row for the shared
   // inbox, instead of each creating a real duplicate.
   if (company.email) {
-    const { contact } = await findOrCreateContact({
+    const { contact, wasCreated } = await findOrCreateContact({
       organizationId: company.organizationId,
       companyId: company.id,
       firstName,
@@ -185,7 +185,7 @@ export async function resolveOutreachContact(decisionMakerId: string): Promise<R
       jobTitle,
       notes: `General company contact — personal email not publicly available for ${decisionMaker.name}.`,
     });
-    return { contactId: contact.id, created: true, emailSource: "company_fallback" };
+    return { contactId: contact.id, created: wasCreated, emailSource: "company_fallback" };
   }
 
   // 4. No real email findable anywhere — never fabricate one.

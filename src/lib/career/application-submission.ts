@@ -18,6 +18,7 @@
 
 import { prisma } from "@/lib/prisma";
 import { sendQueuedDraftCore } from "@/app/dashboard/outreach/_lib/approval-actions";
+import { findOrCreateContact } from "@/lib/business-development/dedup";
 
 export type ApplicationSubmissionMethod = "API" | "AUTHORIZED_BROWSER" | "EMPLOYER_PORTAL" | "USER_ACTION_REQUIRED" | "EMAIL" | "OTHER_SUPPORTED_INTEGRATION";
 
@@ -83,18 +84,18 @@ export type EmailSubmissionOutcome =
  */
 export async function submitApplicationViaEmail(params: EmailSubmissionParams): Promise<EmailSubmissionOutcome> {
   try {
-    let contact = await prisma.contact.findFirst({ where: { organizationId: params.organizationId, email: { equals: params.recipientEmail, mode: "insensitive" } } });
-    if (!contact) {
-      contact = await prisma.contact.create({
-        data: {
-          organizationId: params.organizationId,
-          firstName: "Hiring",
-          lastName: "Team",
-          email: params.recipientEmail,
-          tags: ["career-application"],
-        },
-      });
-    }
+    // Routed through the real single choke point (dedup.ts) instead of a
+    // direct findFirst-then-create — the real @@unique([organizationId,
+    // email]) constraint (Phase 25) means a concurrent/retried submission
+    // for the same recipient needs findOrCreateContact's real
+    // P2002-catch-and-reread handling.
+    const { contact } = await findOrCreateContact({
+      organizationId: params.organizationId,
+      firstName: "Hiring",
+      lastName: "Team",
+      email: params.recipientEmail,
+      tags: ["career-application"],
+    });
 
     const draft = await prisma.emailDraft.create({
       data: {

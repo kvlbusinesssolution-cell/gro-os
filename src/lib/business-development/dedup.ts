@@ -282,18 +282,33 @@ export async function findOrCreateContact(input: FindOrCreateContactInput): Prom
   // A match on a merged-away row resolves to its real, live keeper —
   // email uniqueness means the merged-away row's email can never be
   // reused for a genuinely fresh contact (see this function's own doc
-  // comment above).
-  if (existing?.mergedIntoId) {
+  // comment above). Follows the chain to its terminal (non-merged) row,
+  // not just one hop — a contact can itself have been re-merged again
+  // after an earlier merge (A -> B -> C).
+  while (existing?.mergedIntoId) {
     existing = await prisma.contact.findUnique({ where: { id: existing.mergedIntoId } });
   }
 
   if (existing) {
-    const companyChanged = !!input.companyId && input.companyId !== existing.companyId;
-    const contact = companyChanged
-      ? await prisma.contact.update({ where: { id: existing.id }, data: { companyId: input.companyId } })
-      : !existing.companyId && input.companyId
-        ? await prisma.contact.update({ where: { id: existing.id }, data: { companyId: input.companyId } })
-        : existing;
+    const updateData: Record<string, unknown> = {};
+    if (input.companyId && input.companyId !== existing.companyId) updateData.companyId = input.companyId;
+    if (input.firstName && input.firstName !== existing.firstName) updateData.firstName = input.firstName;
+    if (input.lastName && input.lastName !== existing.lastName) updateData.lastName = input.lastName;
+    if (input.jobTitle && input.jobTitle !== existing.jobTitle) updateData.jobTitle = input.jobTitle;
+    if (input.phone && input.phone !== existing.phone) updateData.phone = input.phone;
+    if (input.country && input.country !== existing.country) updateData.country = input.country;
+    if (input.city && input.city !== existing.city) updateData.city = input.city;
+    if (input.notes && input.notes !== existing.notes) updateData.notes = input.notes;
+    if (input.linkedin && input.linkedin !== existing.linkedin) updateData.linkedin = input.linkedin;
+    if (input.department && input.department !== existing.department) updateData.department = input.department;
+    if (input.relationshipScore != null && input.relationshipScore !== existing.relationshipScore) {
+      updateData.relationshipScore = input.relationshipScore;
+    }
+    if (input.tags && input.tags.length > 0 && input.tags.join() !== existing.tags.join()) updateData.tags = input.tags;
+
+    const contact = Object.keys(updateData).length > 0
+      ? await prisma.contact.update({ where: { id: existing.id }, data: updateData })
+      : existing;
     return { contact, wasCreated: false };
   }
 

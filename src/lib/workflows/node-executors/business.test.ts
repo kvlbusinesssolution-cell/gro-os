@@ -9,6 +9,7 @@ const dealCreate = vi.fn();
 const dealFindUnique = vi.fn();
 const dealUpdate = vi.fn();
 const contactCreate = vi.fn();
+const contactFindFirst = vi.fn();
 const companyFindUnique = vi.fn();
 const projectCreate = vi.fn();
 const membershipFindFirst = vi.fn();
@@ -18,7 +19,7 @@ vi.mock("@/lib/prisma", () => ({
   prisma: {
     dealStage: { findUnique: (...a: unknown[]) => dealStageFindUnique(...a), findFirst: (...a: unknown[]) => dealStageFindFirst(...a) },
     deal: { create: (...a: unknown[]) => dealCreate(...a), findUnique: (...a: unknown[]) => dealFindUnique(...a), update: (...a: unknown[]) => dealUpdate(...a) },
-    contact: { create: (...a: unknown[]) => contactCreate(...a) },
+    contact: { create: (...a: unknown[]) => contactCreate(...a), findFirst: (...a: unknown[]) => contactFindFirst(...a) },
     company: { findUnique: (...a: unknown[]) => companyFindUnique(...a) },
     project: { create: (...a: unknown[]) => projectCreate(...a) },
     membership: { findFirst: (...a: unknown[]) => membershipFindFirst(...a) },
@@ -183,11 +184,32 @@ describe("CRM node executor", () => {
     });
 
     it("creates the contact with real org scoping when validation passes", async () => {
+      contactFindFirst.mockResolvedValue(null);
       contactCreate.mockResolvedValue({ id: "contact_1" });
       const result = await CRM({ action: "create_contact", firstName: "Ann", lastName: "Lee", email: "a@b.com", phone: "555", jobTitle: "CTO" }, makeContext());
 
+      // Routed through findOrCreateContact (dedup.ts) — also fills in its
+      // own deterministic derivations (buyerRole from jobTitle) and default
+      // empty fields, not just the fields this action was given.
       expect(contactCreate).toHaveBeenCalledWith({
-        data: { organizationId: "org_1", firstName: "Ann", lastName: "Lee", email: "a@b.com", companyId: null, phone: "555", jobTitle: "CTO" },
+        data: {
+          organizationId: "org_1",
+          firstName: "Ann",
+          lastName: "Lee",
+          email: "a@b.com",
+          companyId: null,
+          phone: "555",
+          jobTitle: "CTO",
+          country: null,
+          city: null,
+          tags: [],
+          status: undefined,
+          notes: null,
+          linkedin: null,
+          department: null,
+          relationshipScore: null,
+          buyerRole: "TECHNICAL_BUYER",
+        },
       });
       expect(result).toEqual({ output: { contactId: "contact_1" } });
     });

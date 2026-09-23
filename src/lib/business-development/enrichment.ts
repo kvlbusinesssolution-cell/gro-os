@@ -379,12 +379,25 @@ export async function enrichContact(contactId: string, options: EnrichContactOpt
   // contact didn't already have this exact seniority/buyerRole on file, so
   // a repeated no-change re-enrichment run doesn't spam duplicate rows —
   // same idempotency discipline as technology-evidence-sync.ts.
-  const evidenceRows: Array<{ fieldName: string; fact: string }> = [];
+  // Each row carries its own real confidence — seniority's probability
+  // heuristic for `seniority`, and a flat 1.0 for `buyerRole` (a
+  // deterministic keyword classification with no probability concept of
+  // its own; previously both rows wrongly reused seniority's `probability`,
+  // even when buyerRole matched but seniority didn't).
+  const evidenceRows: Array<{ fieldName: string; fact: string; confidence: number }> = [];
   if (seniority && contact.seniority !== seniority) {
-    evidenceRows.push({ fieldName: "seniority", fact: `Seniority estimated as "${seniority}" from job title "${contact.jobTitle}".` });
+    evidenceRows.push({
+      fieldName: "seniority",
+      fact: `Seniority estimated as "${seniority}" from job title "${contact.jobTitle}".`,
+      confidence: probability ?? 0.5,
+    });
   }
   if (buyerRole && buyerRole !== "UNKNOWN" && contact.buyerRole !== buyerRole) {
-    evidenceRows.push({ fieldName: "buyerRole", fact: `Buyer role classified as ${buyerRole} from job title "${contact.jobTitle}".` });
+    evidenceRows.push({
+      fieldName: "buyerRole",
+      fact: `Buyer role classified as ${buyerRole} from job title "${contact.jobTitle}".`,
+      confidence: 1.0,
+    });
   }
   if (evidenceRows.length > 0) {
     await prisma.contactEvidence.createMany({
@@ -393,7 +406,7 @@ export async function enrichContact(contactId: string, options: EnrichContactOpt
         kind: "AI_INTERPRETATION" as const,
         fact: row.fact,
         source: "COMPANY_INTELLIGENCE" as const,
-        confidence: probability ?? 0.5,
+        confidence: row.confidence,
         fieldName: row.fieldName,
       })),
     });

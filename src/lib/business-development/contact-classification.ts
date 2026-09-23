@@ -29,7 +29,7 @@ const BUYER_ROLE_SIGNALS: Array<{ keywords: string[]; role: ContactBuyerRole }> 
  * a real false-positive bug caught by this phase's own test suite. Every
  * keyword, short or long, is matched as a whole word/phrase only.
  */
-function matchesWholeWord(haystack: string, keyword: string): boolean {
+export function matchesWholeWord(haystack: string, keyword: string): boolean {
   const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?:^|[^a-z])${escaped}(?:$|[^a-z])`, "i").test(haystack);
 }

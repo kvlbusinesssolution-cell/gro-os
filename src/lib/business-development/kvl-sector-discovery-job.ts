@@ -12,7 +12,7 @@ import { injectTracking, getAppBaseUrl } from "@/lib/outreach/tracking";
 import type { JobRunLog } from "@/lib/scheduler/types";
 import type { Company, AIAgentInstance, PipelineStage } from "@/generated/prisma/client";
 
-import { findOrCreateCompany, normalizeWebsiteHost } from "./dedup";
+import { findOrCreateCompany, findOrCreateContact, normalizeWebsiteHost } from "./dedup";
 
 /**
  * KVL-only lead discovery + outreach, scoped to KVL's own organizations only
@@ -225,12 +225,19 @@ async function ensureKvlOutreachCampaign(organizationId: string, createdByUserId
 async function autoOutreachToCompany(organizationId: string, campaignId: string, company: Company, email: string | null): Promise<OutreachStatus> {
   if (!email) return "skipped_no_email";
 
-  const existingContact = await prisma.contact.findFirst({ where: { organizationId, email } });
-  if (existingContact) return "already_contacted";
-
-  const contact = await prisma.contact.create({
-    data: { organizationId, companyId: company.id, firstName: "Team", email, country: company.headquartersCountry ?? null },
+  // Routed through the real single choke point (dedup.ts) instead of a
+  // direct findFirst-then-create — that race is exactly what the new
+  // @@unique([organizationId, email]) constraint (Phase 25) now enforces at
+  // the DB level, so a concurrent run creating the same contact needs the
+  // real P2002-catch-and-reread handling findOrCreateContact already has.
+  const { contact, wasCreated } = await findOrCreateContact({
+    organizationId,
+    companyId: company.id,
+    firstName: "Team",
+    email,
+    country: company.headquartersCountry ?? null,
   });
+  if (!wasCreated) return "already_contacted";
 
   await prisma.campaignContact.create({ data: { campaignId, contactId: contact.id } });
 
