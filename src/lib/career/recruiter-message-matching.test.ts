@@ -83,6 +83,21 @@ describe("matchReplyToApplication — §4 real, conservative email->application 
     expect(result.applicationId).toBeNull();
   });
 
+  it("§4 extension — real extracted role text uniquely narrows a multi-application sender to POSSIBLE_MATCH (JOB_SIGNAL_MATCH)", async () => {
+    const reply = await prisma.reply.create({ data: { organizationId, contactId: contactMultipleId, content: "Following up on Engineer A.", channel: "EMAIL", loggedByUserId: userId } });
+    const result = await matchReplyToApplication(reply.id, { company: null, role: "Engineer A" });
+    expect(result.status).toBe("POSSIBLE_MATCH");
+    expect(result.applicationId).toBe(applicationAId);
+    expect(result.evidence).toContain("JOB_SIGNAL_MATCH");
+  });
+
+  it("§4 extension — a wrong/non-matching extracted role still correctly stays AMBIGUOUS, never guesses", async () => {
+    const reply = await prisma.reply.create({ data: { organizationId, contactId: contactMultipleId, content: "Following up.", channel: "EMAIL", loggedByUserId: userId } });
+    const result = await matchReplyToApplication(reply.id, { company: null, role: "Totally Different Role" });
+    expect(result.status).toBe("AMBIGUOUS");
+    expect(result.applicationId).toBeNull();
+  });
+
   it("UNMATCHED — a reply from a sender with no real career-application email on file", async () => {
     const reply = await prisma.reply.create({ data: { organizationId, contactId: contactNoApplicationId, content: "Hello.", channel: "EMAIL", loggedByUserId: userId } });
     const result = await matchReplyToApplication(reply.id);

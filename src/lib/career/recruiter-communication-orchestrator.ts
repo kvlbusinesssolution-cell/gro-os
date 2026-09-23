@@ -57,10 +57,16 @@ export async function processCareerReply(replyId: string): Promise<ProcessResult
   if (!reply) return { processed: false };
   if (!reply.contact.tags.includes("career-application")) return { processed: false };
 
-  const match = await matchReplyToApplication(replyId);
+  // §4 extension — classification runs first so its real extracted
+  // company/role text can disambiguate among multiple real candidate
+  // applications for the same contact (see recruiter-message-matching.ts).
   const classification = await classifyRecruiterMessage(reply.organizationId, reply.content);
-
   const extraction: RecruiterExtraction | Record<string, never> = classification?.extraction ?? {};
+  const match = await matchReplyToApplication(replyId, {
+    company: "company" in extraction ? (extraction.company?.value ?? null) : null,
+    role: "role" in extraction ? (extraction.role?.value ?? null) : null,
+  });
+
   const questionsText = "questions" in extraction ? (extraction.questions ?? []).join(" ") : "";
   const isSensitive = detectsSensitiveQuestion(`${reply.content} ${questionsText}`);
 

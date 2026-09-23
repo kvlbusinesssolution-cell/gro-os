@@ -7,6 +7,13 @@ import { prisma } from "@/lib/prisma";
  * EmailDraft). Falls back to Contact-based inference (§4's "sender
  * address", "prior email conversation") only for POSSIBLE_MATCH/AMBIGUOUS
  * — never silently attaches on weak evidence alone.
+ *
+ * Phase 32 (§4 extension) — when a contact has real applications to
+ * MULTIPLE companies, the real extracted `company`/`role` text (from the
+ * same AI classification pass, not an extra signal invented here) can
+ * disambiguate which specific application a reply concerns — but only when
+ * it narrows to EXACTLY ONE real candidate; two or more genuine matches (or
+ * zero) still correctly falls to AMBIGUOUS/POSSIBLE_MATCH, never a guess.
  */
 
 export type MatchStatus = "MATCHED" | "POSSIBLE_MATCH" | "UNMATCHED" | "AMBIGUOUS";
@@ -38,7 +45,34 @@ async function findApplicationsForContact(contactId: string): Promise<string[]> 
   return [...new Set(documents.map((d) => d.applicationId))];
 }
 
-export async function matchReplyToApplication(replyId: string): Promise<MatchResult> {
+export interface DisambiguationSignals {
+  company: string | null;
+  role: string | null;
+}
+
+/**
+ * Phase 32 (§4) — among real candidate application IDs, narrows to exactly
+ * one using real extracted company/role text, case-insensitive substring
+ * match against each candidate's real Job.company/Job.title. Returns null
+ * (never guesses) unless precisely one candidate matches.
+ */
+async function disambiguateByJobSignals(applicationIds: string[], signals: DisambiguationSignals): Promise<string | null> {
+  if (!signals.company && !signals.role) return null;
+  const applications = await prisma.jobApplication.findMany({
+    where: { id: { in: applicationIds } },
+    select: { id: true, job: { select: { company: true, title: true } } },
+  });
+  const company = signals.company?.toLowerCase().trim();
+  const role = signals.role?.toLowerCase().trim();
+  const matches = applications.filter((app) => {
+    const companyMatches = company ? app.job.company.toLowerCase().includes(company) || company.includes(app.job.company.toLowerCase()) : false;
+    const roleMatches = role ? app.job.title.toLowerCase().includes(role) || role.includes(app.job.title.toLowerCase()) : false;
+    return companyMatches || roleMatches;
+  });
+  return matches.length === 1 ? matches[0].id : null;
+}
+
+export async function matchReplyToApplication(replyId: string, disambiguation?: DisambiguationSignals): Promise<MatchResult> {
   const reply = await prisma.reply.findUnique({
     where: { id: replyId },
     select: { contactId: true, emailDraftId: true },
@@ -72,5 +106,16 @@ export async function matchReplyToApplication(replyId: string): Promise<MatchRes
   if (applicationIds.length === 1) {
     return { status: "POSSIBLE_MATCH", applicationId: applicationIds[0], evidence: "SINGLE_APPLICATION_FOR_CONTACT — exactly one real application email was sent to this sender, but the reply itself carries no direct thread reference." };
   }
-  return { status: "AMBIGUOUS", applicationId: null, evidence: `MULTIPLE_APPLICATIONS_FOR_CONTACT — ${applicationIds.length} real application emails were sent to this sender; cannot reliably attribute this reply without a direct thread reference.` };
+
+  // §4 extension — real company/role text can narrow multiple real
+  // candidates to exactly one; never used to invent a match from zero
+  // candidates, and still AMBIGUOUS if it narrows to 0 or 2+.
+  if (disambiguation) {
+    const narrowed = await disambiguateByJobSignals(applicationIds, disambiguation);
+    if (narrowed) {
+      return { status: "POSSIBLE_MATCH", applicationId: narrowed, evidence: `JOB_SIGNAL_MATCH — the message's real extracted company/role text uniquely matches this application among ${applicationIds.length} candidates for this sender.` };
+    }
+  }
+
+  return { status: "AMBIGUOUS", applicationId: null, evidence: `MULTIPLE_APPLICATIONS_FOR_CONTACT — ${applicationIds.length} real application emails were sent to this sender; cannot reliably attribute this reply without a direct thread reference${disambiguation ? " or a unique company/role match" : ""}.` };
 }

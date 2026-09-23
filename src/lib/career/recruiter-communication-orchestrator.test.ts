@@ -78,6 +78,23 @@ describe("processCareerReply — real end-to-end orchestration + tenant/contact-
     await prisma.organization.deleteMany({ where: { id: organizationId } });
   });
 
+  it("Phase 32 — real tenant isolation: a processed reply's RecruiterCommunication is genuinely scoped to its own org, never visible/leaked to a different org's query", async () => {
+    const otherSuffix = Date.now() + 1;
+    const otherOrg = await prisma.organization.create({ data: { name: "Other Org", slug: `other-org-${otherSuffix}` } });
+    try {
+      const reply = await prisma.reply.create({ data: { organizationId, contactId: careerContactId, content: "General response.", channel: "EMAIL", loggedByUserId: userId } });
+      const result = await processCareerReply(reply.id);
+      expect(result.processed).toBe(true);
+
+      const leaked = await prisma.recruiterCommunication.findFirst({ where: { id: result.communicationId, organizationId: otherOrg.id } });
+      expect(leaked).toBeNull();
+      const real = await prisma.recruiterCommunication.findFirst({ where: { id: result.communicationId, organizationId } });
+      expect(real).not.toBeNull();
+    } finally {
+      await prisma.organization.deleteMany({ where: { id: otherOrg.id } });
+    }
+  });
+
   it("§3 — no-ops for a Reply whose Contact is NOT tagged career-application (never touches ordinary sales replies)", async () => {
     const reply = await prisma.reply.create({ data: { organizationId, contactId: nonCareerContactId, content: "We'd like to move forward.", channel: "EMAIL", loggedByUserId: userId } });
     const result = await processCareerReply(reply.id);

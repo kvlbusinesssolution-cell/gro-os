@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import type { CareerInterviewStatus } from "@/generated/prisma/client";
 import { checkInterviewConflict, type AvailabilityCheckInput } from "./interview-availability";
+import { buildInterviewAcceptanceDraft, buildAlternativeTimeDraft, queueRecruiterDraft } from "./recruiter-reply-drafts";
 
 /**
  * Phase 21 (§20, §21, §22, §26, §27, §53) — real interview creation +
@@ -45,6 +46,26 @@ export async function createOrUpdateInterviewFromCommunication(input: CreateInte
   let status: "PENDING_APPROVAL" | "REQUESTED" = "REQUESTED";
   let conflictDetail: string | null = null;
 
+  // §54 timezone-conflict — real, conservative: if this application already
+  // has an active (non-terminal) interview request with a genuinely
+  // different stated timezone, surface it honestly rather than silently
+  // picking one. Never auto-resolves which timezone is "correct".
+  let timezoneConflictDetail: string | null = null;
+  if (input.timezone) {
+    const priorInterview = await prisma.careerInterview.findFirst({
+      where: {
+        applicationId: input.applicationId,
+        status: { in: ["REQUESTED", "PENDING_APPROVAL", "RESCHEDULE_REQUESTED"] },
+        timezone: { not: null },
+      },
+      select: { timezone: true },
+      orderBy: { createdAt: "desc" },
+    });
+    if (priorInterview?.timezone && priorInterview.timezone !== input.timezone) {
+      timezoneConflictDetail = `Timezone conflict: this message states "${input.timezone}", but an earlier pending interview request for this application stated "${priorInterview.timezone}". Not auto-resolved — needs human review.`;
+    }
+  }
+
   if (input.scheduledAtUtc) {
     const profile = await prisma.careerProfile.findUnique({ where: { id: input.careerProfileId } });
     if (profile) {
@@ -82,7 +103,7 @@ export async function createOrUpdateInterviewFromCommunication(input: CreateInte
       phone: input.phone,
       interviewerName: input.interviewerName,
       idempotencyKey,
-      notes: conflictDetail ? `Conflict detected at request time: ${conflictDetail}` : null,
+      notes: [conflictDetail && `Conflict detected at request time: ${conflictDetail}`, timezoneConflictDetail].filter(Boolean).join(" ") || null,
     },
   });
 
@@ -115,6 +136,19 @@ export async function decideInterview(interviewId: string, userId: string, decis
     data: { status: newStatus, decision, decisionByUserId: userId, decisionAt: new Date() },
   });
 
-  await logAudit({ organizationId: interview.organizationId, userId, action: "career:interview:decided", metadata: { interviewId, decision, newStatus } });
+  // §22/§24/§25 — a real human decision now genuinely authorizes preparing
+  // (never auto-sending — §46, status DRAFT) an actual outbound reply,
+  // closing the gap where ACCEPT/SUGGEST_ALTERNATIVE previously only
+  // changed internal state with no real communication ever prepared.
+  let draftId: string | null = null;
+  if (decision === "ACCEPT") {
+    const content = await buildInterviewAcceptanceDraft(interviewId);
+    if (content) draftId = (await queueRecruiterDraft({ kind: "interview", id: interviewId }, content))?.id ?? null;
+  } else if (decision === "SUGGEST_ALTERNATIVE" || decision === "REQUEST_ANOTHER_SLOT") {
+    const content = await buildAlternativeTimeDraft(interviewId, decision);
+    if (content) draftId = (await queueRecruiterDraft({ kind: "interview", id: interviewId }, content))?.id ?? null;
+  }
+
+  await logAudit({ organizationId: interview.organizationId, userId, action: "career:interview:decided", metadata: { interviewId, decision, newStatus, draftId } });
   return { ok: true };
 }
