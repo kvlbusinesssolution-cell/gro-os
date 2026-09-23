@@ -5,17 +5,12 @@ import { getSecret } from "@/lib/secrets/store";
 import { getFreshAccessToken } from "@/lib/integrations/connection-store";
 import { prisma } from "@/lib/prisma";
 import { decryptWebhookSecret, recordWebhookDelivery } from "@/lib/workflows/webhooks";
-import { signPayload } from "@/lib/workflows/webhook-signature";
+import { signPayload, WEBHOOK_SIGNATURE_HEADER } from "@/lib/workflows/webhook-signature";
 import { enqueueWebhookDelivery } from "@/lib/workflows/webhook-delivery-queue";
 import { assertPublicUrl, performOutgoingRequest, readOutgoingRequestConfig, type OutgoingRequestResult } from "./outgoing-request";
 import type { NotificationType, Webhook } from "@/generated/prisma/client";
 
-// Same header name convention the incoming custom-webhook receiver route
-// (src/app/api/webhooks/custom/[slug]/route.ts) is expected to verify
-// against — that file did not exist yet as of this batch, so this default
-// is a best-effort convention, not a confirmed cross-check. Reconcile if it
-// lands with a different header name.
-export const WEBHOOK_SIGNATURE_HEADER = "X-KVL-Signature";
+export { WEBHOOK_SIGNATURE_HEADER };
 
 const NOTIFICATION_TYPES = new Set<NotificationType>([
   "MEETING_STARTED",

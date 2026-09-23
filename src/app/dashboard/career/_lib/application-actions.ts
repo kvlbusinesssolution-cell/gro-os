@@ -9,6 +9,7 @@ import { notifyUser } from "@/lib/notifications";
 import { prepareApplicationCore, submitApplicationCore, reconcileSubmissionStatusCore, type PrepareApplicationResult, type SubmitApplicationResult } from "@/lib/career/application-orchestrator";
 import { assertValidTransition } from "@/lib/career/application-state-machine";
 import { applicationPolicySchema, type ApplicationPolicyInput } from "@/lib/validations/career";
+import { emitWebhookEvent } from "@/lib/webhooks/event-bus";
 
 export interface ActionResult {
   ok: boolean;
@@ -131,6 +132,7 @@ export async function withdrawApplication(applicationId: string, reason?: string
   await prisma.jobApplication.update({ where: { id: applicationId }, data: { status: "WITHDRAWN", withdrawnAt: new Date(), withdrawReason: reason ?? null } });
   await logAudit({ userId, organizationId: membership.organizationId, action: "career:application:withdrawn", metadata: { applicationId, reason: reason ?? null } });
   await notifyUser({ userId, organizationId: membership.organizationId, type: "SYSTEM_NOTICE", title: "Application withdrawn", message: "Your application was withdrawn." });
+  void emitWebhookEvent(membership.organizationId, "APPLICATION_STATUS_CHANGED", { applicationId, status: "WITHDRAWN", source: "manual" });
 
   revalidatePath("/dashboard/career/applications");
   return { ok: true };

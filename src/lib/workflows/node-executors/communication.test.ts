@@ -40,6 +40,7 @@ vi.mock("@/lib/workflows/webhooks", () => ({
 const signPayload = vi.fn();
 vi.mock("@/lib/workflows/webhook-signature", () => ({
   signPayload: (...args: unknown[]) => signPayload(...args),
+  WEBHOOK_SIGNATURE_HEADER: "X-KVL-Signature",
 }));
 
 const enqueueWebhookDelivery = vi.fn();

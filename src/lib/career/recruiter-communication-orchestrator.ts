@@ -5,6 +5,7 @@ import { classifyRecruiterMessage, detectsSensitiveQuestion, type RecruiterExtra
 import { matchReplyToApplication } from "./recruiter-message-matching";
 import { determineNextAction, type NextAction } from "./next-action-engine";
 import { createOrUpdateInterviewFromCommunication } from "./interview-scheduling";
+import { emitWebhookEvent } from "@/lib/webhooks/event-bus";
 
 /**
  * Phase 21 — the real orchestration entry point. Called from
@@ -110,12 +111,15 @@ export async function processCareerReply(replyId: string): Promise<ProcessResult
       if (classificationType === "REJECTED" && confidence !== "LOW" && confidence !== "UNKNOWN") {
         await prisma.jobApplication.update({ where: { id: application.id }, data: { status: "REJECTED", rejectedAt: new Date() } });
         await logAudit({ organizationId: reply.organizationId, action: "career:application:status_synced", metadata: { applicationId: application.id, newStatus: "REJECTED", source: "recruiter_communication", communicationId: communication.id } });
+        void emitWebhookEvent(reply.organizationId, "APPLICATION_STATUS_CHANGED", { applicationId: application.id, status: "REJECTED", source: "recruiter_communication" });
       } else if (classificationType === "OFFER" && confidence !== "LOW" && confidence !== "UNKNOWN") {
         await prisma.jobApplication.update({ where: { id: application.id }, data: { status: "OFFER", offerDetectedAt: new Date() } });
         await logAudit({ organizationId: reply.organizationId, action: "career:application:status_synced", metadata: { applicationId: application.id, newStatus: "OFFER", source: "recruiter_communication", communicationId: communication.id } });
+        void emitWebhookEvent(reply.organizationId, "APPLICATION_STATUS_CHANGED", { applicationId: application.id, status: "OFFER", source: "recruiter_communication" });
       } else if ((classificationType === "INTERVIEW_REQUEST" || classificationType === "SCREENING") && application.status !== "INTERVIEW") {
         await prisma.jobApplication.update({ where: { id: application.id }, data: { status: "INTERVIEW", interviewDetectedAt: new Date() } });
         await logAudit({ organizationId: reply.organizationId, action: "career:application:status_synced", metadata: { applicationId: application.id, newStatus: "INTERVIEW", source: "recruiter_communication", communicationId: communication.id } });
+        void emitWebhookEvent(reply.organizationId, "APPLICATION_STATUS_CHANGED", { applicationId: application.id, status: "INTERVIEW", source: "recruiter_communication" });
       }
     }
 

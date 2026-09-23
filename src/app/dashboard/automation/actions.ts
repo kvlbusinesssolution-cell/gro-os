@@ -30,7 +30,8 @@ import { generateWorkflowPlan, WorkflowPlanValidationError, type WorkflowPlan } 
 import { createWorkflowFromPlan } from "@/lib/workflows/ai-designer-persist";
 import { enqueueWebhookDelivery } from "@/lib/workflows/webhook-delivery-queue";
 import * as webhookLib from "@/lib/workflows/webhooks";
-import { createWebhookSchema, type CreateWebhookInput } from "@/lib/validations/webhooks";
+import { z } from "zod";
+import { createWebhookSchema, webhookEventTypeSchema, type CreateWebhookInput } from "@/lib/validations/webhooks";
 import type { Webhook } from "@/generated/prisma/client";
 
 export interface ActionResult {
@@ -769,6 +770,37 @@ export async function toggleWebhookActiveAction(webhookId: string, active: boole
   } catch (error) {
     console.error("[automation] toggleWebhookActiveAction failed:", error);
     return { ok: false, error: "Something went wrong updating the webhook. Please try again." };
+  }
+}
+
+/** Phase 33: replaces the full set of platform event-bus subscriptions (WebhookEventType[]) this webhook receives. Independent of, and safe to call regardless of, the webhook's workflowId/direction. */
+export async function updateWebhookEventTypesAction(webhookId: string, eventTypes: string[]): Promise<WebhookActionResult> {
+  const session = await auth();
+  const userId = session?.user?.id;
+  if (!userId) return { ok: false, error: "You must be signed in." };
+
+  const parsed = z.array(webhookEventTypeSchema).safeParse(eventTypes);
+  if (!parsed.success) return { ok: false, error: "Invalid event type." };
+
+  const access = await requireEditableMembership(userId);
+  if (!access.ok) return access;
+
+  const existing = await requireOrgWebhook(access.membership.organizationId, webhookId);
+  if (!existing) return { ok: false, error: "Webhook not found." };
+
+  try {
+    const webhook = await webhookLib.updateWebhookEventTypes(webhookId, access.membership.organizationId, parsed.data);
+    await logAudit({
+      userId,
+      organizationId: access.membership.organizationId,
+      action: "automation.webhook_event_types_updated",
+      metadata: { webhookId, eventTypes: parsed.data },
+    });
+    revalidateWebhookOwner(webhook.workflowId);
+    return { ok: true, webhook };
+  } catch (error) {
+    console.error("[automation] updateWebhookEventTypesAction failed:", error);
+    return { ok: false, error: "Something went wrong updating event subscriptions. Please try again." };
   }
 }
 

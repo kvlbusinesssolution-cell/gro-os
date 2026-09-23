@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { contactSchema, type ContactInput, type ContactStatusInput } from "@/lib/validations/outreach";
 import { findOrCreateContact } from "@/lib/business-development/dedup";
+import { emitWebhookEvent } from "@/lib/webhooks/event-bus";
 
 export interface ActionResult {
   ok: boolean;
@@ -70,6 +71,12 @@ export async function createContact(input: ContactInput): Promise<CreateContactR
 
     if (wasCreated) {
       await logAudit({ userId, organizationId: membership.organizationId, action: "outreach.contact_created", metadata: { contactId: contact.id } });
+      void emitWebhookEvent(membership.organizationId, "CONTACT_CREATED", {
+        contactId: contact.id,
+        email: contact.email,
+        firstName: contact.firstName,
+        lastName: contact.lastName,
+      });
     }
     revalidatePath("/dashboard/outreach/contacts");
     revalidatePath("/dashboard/crm/contacts");

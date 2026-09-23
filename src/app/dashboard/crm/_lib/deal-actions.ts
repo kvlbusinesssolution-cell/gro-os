@@ -13,6 +13,7 @@ import { convertWonDealToProject } from "@/lib/projects/deal-conversion";
 import { storeAgentMemory } from "@/lib/ai/agent-runtime";
 import { generatePartnerCommissionForDeal } from "@/lib/business-development/partner-commission";
 import { dealSchema, type DealInput } from "@/lib/validations/crm";
+import { emitWebhookEvent } from "@/lib/webhooks/event-bus";
 
 export interface ActionResult {
   ok: boolean;
@@ -279,6 +280,7 @@ export async function moveDealStage(dealId: string, targetStageId: string): Prom
       });
       await evaluateAutomationRules(membership.organizationId, "DEAL_WON", { subject: deal.name, dealId });
       await fireWorkflowTrigger(membership.organizationId, "DEAL_WON", { dealId, dealName: deal.name, value: deal.value, companyId: deal.companyId });
+      void emitWebhookEvent(membership.organizationId, "DEAL_WON", { dealId, dealName: deal.name, value: deal.value, companyId: deal.companyId });
       await convertWonDealToProject(dealId);
 
       // Real memory write for the org's Sales agent — a genuine won-deal
@@ -321,6 +323,7 @@ export async function moveDealStage(dealId: string, targetStageId: string): Prom
       });
       await evaluateAutomationRules(membership.organizationId, "DEAL_LOST", { subject: deal.name, dealId });
       await fireWorkflowTrigger(membership.organizationId, "DEAL_LOST", { dealId, dealName: deal.name, value: deal.value, companyId: deal.companyId, lostReason: deal.lostReason });
+      void emitWebhookEvent(membership.organizationId, "DEAL_LOST", { dealId, dealName: deal.name, value: deal.value, companyId: deal.companyId, lostReason: deal.lostReason });
     }
 
     revalidatePath("/dashboard/crm/deals");

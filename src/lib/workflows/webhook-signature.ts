@@ -1,5 +1,11 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
+// Canonical header name for every HMAC-signed outgoing webhook delivery —
+// workflow-triggered (communication.ts) AND platform event-bus (event-bus.ts)
+// deliveries both sign with this same header, so a receiver only ever needs
+// one verification code path regardless of which system sent the request.
+export const WEBHOOK_SIGNATURE_HEADER = "X-KVL-Signature";
+
 /**
  * Generates a real, cryptographically random HMAC signing secret for a
  * Webhook row — 32 bytes of entropy, hex-encoded (64 chars), matching this

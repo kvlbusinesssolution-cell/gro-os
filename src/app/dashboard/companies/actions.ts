@@ -11,6 +11,7 @@ import { addCompanyTimelineEvent } from "@/lib/company-intelligence";
 import { scoreCompany } from "@/lib/lead-scoring";
 import { geocodeAddress } from "@/lib/geo/geocode";
 import { companySchema, type CompanyInput } from "@/lib/validations/company-directory";
+import { emitWebhookEvent } from "@/lib/webhooks/event-bus";
 import { Prisma } from "@/generated/prisma/client";
 import { z } from "zod";
 
@@ -170,6 +171,7 @@ export async function createCompany(input: CompanyInput): Promise<CreateCompanyR
       source: "MANUAL",
     });
     await scoreCompany(company.id);
+    void emitWebhookEvent(organizationId, "COMPANY_CREATED", { companyId: company.id, name: company.name });
 
     revalidatePath("/dashboard/companies");
     revalidatePath("/dashboard/crm");

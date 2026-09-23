@@ -2,13 +2,15 @@ import { randomBytes } from "node:crypto";
 
 import { prisma } from "@/lib/prisma";
 import { encryptWithKey, decryptWithKey } from "@/lib/crypto/aes-gcm";
-import type { Prisma, Webhook, WebhookDelivery } from "@/generated/prisma/client";
+import type { Prisma, Webhook, WebhookDelivery, WebhookEventType } from "@/generated/prisma/client";
 import { generateWebhookSecret } from "./webhook-signature";
 
 export interface CreateWebhookInput {
   direction: "INCOMING" | "OUTGOING";
   workflowId?: string;
   targetUrl?: string;
+  /** Phase 33: platform event-bus subscriptions this row should receive (see WebhookEventType). Only meaningful for OUTGOING. */
+  eventTypes?: WebhookEventType[];
 }
 
 export interface WebhookDeliveryResult {
@@ -91,9 +93,20 @@ export async function createWebhook(
       direction: "OUTGOING",
       targetUrl: input.targetUrl ?? undefined,
       encryptedSecret,
+      eventTypes: input.eventTypes ?? [],
     },
   });
   return { webhook, plaintextSecret };
+}
+
+/** Replaces the full set of platform event-bus subscriptions this webhook receives. An empty array unsubscribes it from every event without deleting the row (workflow-triggered delivery, if any, is unaffected). */
+export async function updateWebhookEventTypes(
+  webhookId: string,
+  organizationId: string,
+  eventTypes: WebhookEventType[],
+): Promise<Webhook> {
+  await requireOwnedWebhook(webhookId, organizationId);
+  return prisma.webhook.update({ where: { id: webhookId }, data: { eventTypes } });
 }
 
 /**
@@ -114,6 +127,7 @@ export async function listWebhooks(organizationId: string, workflowId?: string):
       targetUrl: true,
       active: true,
       lastTriggeredAt: true,
+      eventTypes: true,
       createdAt: true,
       updatedAt: true,
     },

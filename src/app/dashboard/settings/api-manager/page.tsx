@@ -5,6 +5,7 @@ import { Container } from "@/components/ui/container";
 import { requireActiveMembership } from "../../_lib/require-membership";
 import { UsageDashboard } from "./_components/usage-dashboard";
 import { ApiDocsSection } from "./_components/api-docs-section";
+import { EventWebhookManager } from "./_components/event-webhook-manager";
 
 export default async function ApiManagerPage() {
   const { membership } = await requireActiveMembership("/dashboard/settings/api-manager");
@@ -29,6 +30,7 @@ export default async function ApiManagerPage() {
 
       <div className="flex flex-col gap-6">
         <UsageDashboard organizationId={membership.organizationId} />
+        <EventWebhookManager />
         <ApiDocsSection />
       </div>
     </Container>

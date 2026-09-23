@@ -7673,6 +7673,20 @@ enum WebhookDirection {
   OUTGOING
 }
 
+// Phase 33: the platform's fixed catalog of typed events a developer can
+// subscribe to (Webhook.eventTypes below) — distinct from the per-Workflow
+// generic WEBHOOK/CUSTOM_API node, which fires on workflow logic, not a
+// named business event. Extend this enum (and the real emitWebhookEvent()
+// call site in src/lib/webhooks/event-bus.ts) together — never add an event
+// name here without a real emitter, and never emit an event not listed here.
+enum WebhookEventType {
+  CONTACT_CREATED
+  COMPANY_CREATED
+  DEAL_WON
+  DEAL_LOST
+  APPLICATION_STATUS_CHANGED
+}
+
 // User-configured, dynamically-created webhooks tied to a Workflow — the
 // generic Webhook Engine's own model. Distinct from the hardcoded, code-level
 // receiver routes already built for DocuSign/Adobe Sign/Dropbox Sign/Resend
@@ -7693,6 +7707,12 @@ model Webhook {
   encryptedSecret String?          @db.Text
   active          Boolean          @default(true)
   lastTriggeredAt DateTime?
+  // Phase 33: when non-empty, this row is ALSO (or exclusively, if
+  // workflowId is null) a platform event-bus subscription — delivered by
+  // emitWebhookEvent() whenever a matching typed business event fires for
+  // this organization, in addition to (or instead of) any Workflow-triggered
+  // delivery. A row can legitimately have both a workflowId and eventTypes.
+  eventTypes      WebhookEventType[] @default([])
 
   organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   workflow     Workflow?         @relation(fields: [workflowId], references: [id], onDelete: SetNull)
