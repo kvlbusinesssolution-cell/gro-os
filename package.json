@@ -51,7 +51,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
-    "countries-and-timezones": "^3.9.0",
+    "countries-and-timezones": "^3.10.0",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
     "framer-motion": "^12.42.2",
