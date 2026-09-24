@@ -21,6 +21,7 @@ import {
   Mail,
   BadgeCheck,
   Coins,
+  Users,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -43,9 +44,16 @@ interface AdminLinkGroup {
  * full nav (CRM, Projects, Billing-as-a-customer, etc.) — those pages are
  * per-organization and have no meaningful "platform" view without picking a
  * specific tenant first (a separate, larger feature — see the plan behind
- * this file for why it's out of scope here).
+ * this file for why it's out of scope here). Users is the one exception:
+ * User.memberships is a many-relation, so a real user isn't scoped to one
+ * organization the way CRM/Projects/Billing data is — see
+ * src/app/admin/users/page.tsx's own header comment.
  */
 const GROUPS: AdminLinkGroup[] = [
+  {
+    label: "Users",
+    links: [{ href: "/admin/users", label: "User Management", icon: Users, exact: true }],
+  },
   {
     label: "Launch",
     links: [
