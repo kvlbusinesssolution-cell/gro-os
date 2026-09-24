@@ -54,7 +54,7 @@
     "countries-and-timezones": "^3.9.0",
     "docx": "^9.7.1",
     "exceljs": "^4.4.0",
-    "framer-motion": "^12.42.2",
+    "framer-motion": "^13.4.0",
     "gpt-tokenizer": "^3.4.0",
     "graphql": "^16.14.2",
     "gsap": "^3.15.0",
