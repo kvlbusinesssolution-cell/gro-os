@@ -3,6 +3,14 @@ import type { MetadataRoute } from "next";
 import { prisma } from "@/lib/prisma";
 import { getSiteUrl } from "@/lib/site-config";
 
+// Queries real PUBLISHED listings below, so a build-time static snapshot
+// would go stale the moment a listing is published/unpublished after
+// deploy — and there's no real database reachable during the Docker image
+// build anyway (see Dockerfile's placeholder DATABASE_URL comment). Forcing
+// this dynamic makes Next.js evaluate it per-request instead of trying to
+// prerender it at build time.
+export const dynamic = "force-dynamic";
+
 const BASE_URL = getSiteUrl();
 
 const PUBLIC_PAGES: { path: string; changeFrequency: MetadataRoute.Sitemap[number]["changeFrequency"]; priority: number }[] = [

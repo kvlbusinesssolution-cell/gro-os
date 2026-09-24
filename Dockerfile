@@ -44,13 +44,23 @@ ENV DATABASE_URL=${DATABASE_URL}
 
 # `next build`'s own "Running TypeScript..." step type-checks the whole
 # project in a single worker process — this codebase has grown large enough
-# that Node's default ~2GB heap is no longer enough for that step alone
-# (verified: OOM-kills mid-build otherwise), independent of how much memory
-# the running app itself needs at runtime. Build-time only — never applied
-# to the runner stage below.
-ENV NODE_OPTIONS="--max-old-space-size=4096"
+# that Node's default ~2GB heap, then 4096MB, are no longer enough for that
+# step alone (verified: OOM-kills mid-build otherwise), independent of how
+# much memory the running app itself needs at runtime. Build-time only —
+# never applied to the runner stage below. Overridable via --build-arg for a
+# memory-constrained build host (e.g. a shared VPS also running other sites)
+# that can't spare the default's headroom.
+ARG NODE_OPTIONS="--max-old-space-size=6144"
+ENV NODE_OPTIONS=${NODE_OPTIONS}
 
-RUN npx prisma generate
+# `npx prisma` (rather than the locally-installed binary below) doesn't
+# reliably resolve the project's own pinned prisma from ./node_modules/.bin
+# inside this Alpine build stage — it falls through to fetching a fresh
+# `prisma@latest` via npm's exec cache instead, which can't load
+# prisma.config.ts ("Cannot find module 'prisma/config'") since that fetched
+# copy isn't wired into this project's own node_modules. Calling the local
+# binary directly sidesteps npx's resolution entirely.
+RUN node_modules/.bin/prisma generate
 RUN npm run build
 
 # ---------- runner: minimal production image ----------
