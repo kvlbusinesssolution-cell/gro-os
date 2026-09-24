@@ -21,6 +21,8 @@ export const ar: Dictionary = {
   "nav.growthEngine": "محرك النمو",
   "nav.websiteScanner": "ماسح المواقع",
   "nav.outreach": "التواصل",
+  "nav.marketing": "التسويق",
+  "nav.businessGrowth": "النمو التجاري",
   "nav.crm": "إدارة علاقات العملاء",
   "nav.projects": "المشاريع",
   "nav.delivery": "التسليم",

@@ -607,6 +607,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                     growthRate: company.growthRate != null ? String(company.growthRate) : "",
                     fundingStage: company.fundingStage ?? "",
                     fundingAmount: company.fundingAmount != null ? String(company.fundingAmount) : "",
+                    fundingDate: company.fundingDate ? company.fundingDate.toISOString().slice(0, 10) : "",
                     language: company.language ?? "",
                     referralPartnerId: company.referralPartnerId ?? "",
                   }}

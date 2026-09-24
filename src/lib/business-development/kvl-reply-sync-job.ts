@@ -29,6 +29,19 @@ function imapConfigured(): boolean {
   return !!(process.env.KVL_IMAP_HOST && process.env.KVL_IMAP_USER && process.env.KVL_IMAP_PASSWORD);
 }
 
+/** Strips reply/forward prefixes (possibly repeated, e.g. "Re: Re: Fwd:") and normalizes case/whitespace, so an owner's reply subject can be compared against the original escalation email's subject regardless of the client's own quoting convention. */
+function normalizeSubjectForMatch(subject: string): string {
+  return subject
+    .replace(/^\s*(re|fwd?)\s*:\s*/gi, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** Reconstructs the exact subject initiateRateNegotiation() sent the owner, so an incoming reply can be matched back to the specific negotiation it's actually replying to — see the doc comment above runKvlReplySync's owner-reply branch for why this matters once more than one negotiation is open at once. */
+function expectedOwnerEmailSubject(contactFirstName: string, companyName: string): string {
+  return `Rate decision needed — ${contactFirstName} at ${companyName} asked about price`;
+}
+
 /**
  * Real existence check backing the dedup backstop above — matches on the
  * same org/contact/channel plus the exact real message content and, when
@@ -131,16 +144,35 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
           // inbox this job polls (their natural "Reply" to the escalation
           // email this job's sibling flow sent from this same address), so
           // an incoming message FROM the owner's own report address is
-          // never a client reply — it's the owner's real decision on the
-          // most recent still-open negotiation thread across EITHER real
-          // KVL org. Single owner, single open thread at a time (per org)
-          // is a fair real-world assumption for KVL's own team size;
-          // documented, not hidden.
+          // never a client reply — it's the owner's real decision on one of
+          // the still-open negotiation threads across EITHER real KVL org.
+          // When exactly one is AWAITING_OWNER, there's nothing to
+          // disambiguate. When two or more are open at once (both KVL orgs
+          // can have a live negotiation simultaneously), the reply's own
+          // subject line is matched back against each candidate's original
+          // escalation-email subject — never just "most recent," which
+          // could silently close the wrong org's negotiation with the
+          // owner's decision meant for a different client.
           if (fromAddress === KVL_OWNER_REPORT_EMAIL.toLowerCase()) {
-            const negotiation = await prisma.rateNegotiation.findFirst({
+            const candidates = await prisma.rateNegotiation.findMany({
               where: { organizationId: { in: [...orgContexts.keys()] }, status: "AWAITING_OWNER" },
               orderBy: { createdAt: "desc" },
+              include: { contact: true, company: true },
             });
+
+            let negotiation: (typeof candidates)[number] | null = candidates[0] ?? null;
+            if (candidates.length > 1) {
+              const incomingSubject = normalizeSubjectForMatch(parsed.subject ?? "");
+              negotiation =
+                candidates.find((c) => normalizeSubjectForMatch(expectedOwnerEmailSubject(c.contact.firstName, c.company.name)) === incomingSubject) ?? null;
+              if (!negotiation) {
+                logs.push({
+                  level: "warn",
+                  message: `Owner replied from ${fromAddress} while ${candidates.length} rate negotiations are AWAITING_OWNER across KVL orgs and the reply's subject didn't match any of them — skipped rather than guessing which one to close.`,
+                });
+              }
+            }
+
             if (negotiation) {
               const result = await completeRateNegotiationAfterOwnerReply(negotiation.id, bodyText);
               if (result.ok) {
@@ -148,7 +180,7 @@ export async function runKvlReplySync(): Promise<JobRunLog[]> {
               } else {
                 logs.push({ level: "error", message: `Failed to complete rate negotiation ${negotiation.id}: ${result.error}`, organizationId: negotiation.organizationId });
               }
-            } else {
+            } else if (candidates.length === 0) {
               logs.push({ level: "info", message: `Owner replied from ${fromAddress} but no negotiation is currently AWAITING_OWNER in any KVL org — treated as a normal owner email, not logged as a client reply.` });
             }
             await client.messageFlagsAdd(uid, ["\\Seen"], { uid: true });

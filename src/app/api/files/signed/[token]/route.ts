@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { verifySignedFileToken } from "@/lib/storage/signed-url";
 import { readDocumentFile } from "@/lib/storage/documents";
+import { readMarketingAssetFile } from "@/lib/storage/marketing-assets";
 import { readProjectFileVersion } from "@/lib/storage/project-files";
 import { readWhiteLabelAsset } from "@/lib/storage/white-label-assets";
 import { readPlatformInvoiceFile } from "@/lib/storage/platform-invoices";
@@ -26,6 +27,7 @@ import { readKnowledgeAttachment } from "@/lib/storage/knowledge-attachments";
  */
 const SUBDIR_READERS: Record<string, (storageKey: string) => Promise<Buffer>> = {
   documents: readDocumentFile,
+  "marketing-assets": readMarketingAssetFile,
   "project-files": readProjectFileVersion,
   "white-label-assets": readWhiteLabelAsset,
   "platform-invoices": readPlatformInvoiceFile,

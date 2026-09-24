@@ -36,10 +36,18 @@ export async function getEmailHealthOverviewAction() {
 
   const identities = await prisma.sendingIdentity.findMany({ where: { organizationId: membership.organizationId }, orderBy: { createdAt: "asc" } });
   const domains = [...new Set(identities.map((i) => i.domain))];
+  // One identity's provider per domain — the real, documented DKIM selector
+  // convention only exists for RESEND/GMAIL/OUTLOOK (see domain-health.ts);
+  // SMTP and any domain with mixed providers fall through to the honest
+  // NOT_VERIFIED path there, never a guess.
+  const KNOWN_DKIM_PROVIDERS = new Set(["RESEND", "GMAIL", "OUTLOOK"]);
+  const providerByDomain = new Map(
+    identities.map((i) => [i.domain, KNOWN_DKIM_PROVIDERS.has(i.provider) ? (i.provider as "RESEND" | "GMAIL" | "OUTLOOK") : null]),
+  );
 
   const [healths, domainChecks] = await Promise.all([
     Promise.all(identities.map((identity) => evaluateSendingIdentityHealth(identity))),
-    Promise.all(domains.map((domain) => checkDomainHealth(domain))),
+    Promise.all(domains.map((domain) => checkDomainHealth(domain, providerByDomain.get(domain) ?? null))),
   ]);
 
   return {

@@ -15,6 +15,13 @@ import { computeOpportunityScore } from "./opportunity-priority";
 import { findMatchingDecisionMaker } from "./decision-maker-matching";
 import { buildWebsiteIntelligenceEvidence } from "./website-intelligence";
 import { classifyBusinessType } from "./business-type-classification";
+import { enrichCompanyRegistry } from "@/lib/enrichment/company-registry-waterfall";
+import { verifyContactEmailWaterfall, discoverCompanyEmailPattern } from "@/lib/enrichment/email-waterfall";
+import { enrichCompanyTechnologyIfNoScan } from "@/lib/enrichment/technology-signal";
+import { enrichCompanyPhoneFromWebsite } from "@/lib/enrichment/company-phone-finder";
+import { enrichCompanySizeFromFmp } from "@/lib/enrichment/company-size-finder";
+import { enrichCompanyFundingFromEdgar } from "@/lib/enrichment/company-funding-finder";
+import { enrichContactPhoneAndLinkedIn } from "@/lib/enrichment/contact-phone-linkedin-finder";
 import type { EnrichmentRun, EnrichmentRunStatus, EnrichmentTrigger } from "@/generated/prisma/client";
 
 /**
@@ -42,6 +49,12 @@ import type { EnrichmentRun, EnrichmentRunStatus, EnrichmentTrigger } from "@/ge
 const STEP_WEBSITE_EVIDENCE = "WEBSITE_EVIDENCE";
 const STEP_COMPANY_INTELLIGENCE = "COMPANY_INTELLIGENCE";
 const STEP_BUSINESS_TYPE = "BUSINESS_TYPE";
+const STEP_COMPANY_REGISTRY = "COMPANY_REGISTRY";
+const STEP_EMAIL_PATTERN = "EMAIL_PATTERN";
+const STEP_TECHNOLOGY_SIGNAL = "TECHNOLOGY_SIGNAL";
+const STEP_PHONE_FINDER = "PHONE_FINDER";
+const STEP_COMPANY_SIZE_FINDER = "COMPANY_SIZE_FINDER";
+const STEP_FUNDING_FINDER = "FUNDING_FINDER";
 const STEP_INTENT_SCORE = "INTENT_SCORE";
 const STEP_DECISION_MAKERS = "DECISION_MAKERS";
 const STEP_OPPORTUNITIES = "OPPORTUNITIES";
@@ -100,30 +113,102 @@ export async function enrichCompany(companyId: string, options: EnrichCompanyOpt
   });
   await prisma.company.update({ where: { id: companyId }, data: { enrichmentStatus: "RUNNING" } });
 
-  if (!isAIConnected()) {
-    run = await prisma.enrichmentRun.update({
-      where: { id: run.id },
-      data: { status: "FAILED", error: "AI provider not configured — no enrichment step could run.", finishedAt: new Date() },
-    });
-    await prisma.company.update({
-      where: { id: companyId },
-      data: { enrichmentStatus: "FAILED", enrichmentFailureReason: "AI provider not configured" },
-    });
-    console.warn(`[enrichment] company ${companyId}: skipped, no AI provider configured`);
-    return { run, status: "FAILED" };
-  }
-
   // Backfill `domain` from `website` if this row predates that field —
   // never overwrites a website value, purely derived, no AI/network call.
   if (!company.domain) {
     const domain = normalizeWebsiteHost(company.website);
     if (domain) await prisma.company.update({ where: { id: companyId }, data: { domain } });
   }
+  const domain = company.domain ?? normalizeWebsiteHost(company.website);
 
   const startedAt = run.startedAt;
   const stepsCompleted: string[] = [];
   const stepsFailed: string[] = [];
   const errors: string[] = [];
+
+  // Real legal-registry + email-pattern lookups (src/lib/enrichment/) run
+  // regardless of AI connectivity — neither one is an AI call, so gating
+  // them behind the AI-provider check below would incorrectly block real,
+  // independent data providers (Hunter.io, OpenCorporates, UK Companies
+  // House) just because no AI key happens to be configured.
+  try {
+    const registryResult = await enrichCompanyRegistry(companyId);
+    if (registryResult.attempted) stepsCompleted.push(STEP_COMPANY_REGISTRY);
+  } catch (error) {
+    stepsFailed.push(STEP_COMPANY_REGISTRY);
+    errors.push(`${STEP_COMPANY_REGISTRY}: ${errorMessage(error)}`);
+    console.error(`[enrichment] company ${companyId} — ${STEP_COMPANY_REGISTRY} failed:`, error);
+  }
+
+  if (domain) {
+    try {
+      const patternResult = await discoverCompanyEmailPattern(company.organizationId, domain);
+      if (patternResult.attempted) stepsCompleted.push(STEP_EMAIL_PATTERN);
+    } catch (error) {
+      stepsFailed.push(STEP_EMAIL_PATTERN);
+      errors.push(`${STEP_EMAIL_PATTERN}: ${errorMessage(error)}`);
+      console.error(`[enrichment] company ${companyId} — ${STEP_EMAIL_PATTERN} failed:`, error);
+    }
+  }
+
+  try {
+    const technologyResult = await enrichCompanyTechnologyIfNoScan(companyId);
+    if (technologyResult.attempted) stepsCompleted.push(STEP_TECHNOLOGY_SIGNAL);
+  } catch (error) {
+    stepsFailed.push(STEP_TECHNOLOGY_SIGNAL);
+    errors.push(`${STEP_TECHNOLOGY_SIGNAL}: ${errorMessage(error)}`);
+    console.error(`[enrichment] company ${companyId} — ${STEP_TECHNOLOGY_SIGNAL} failed:`, error);
+  }
+
+  // Real, zero/low-cost finders (website scrape, FMP, SEC EDGAR) — never
+  // AI calls, so they run unconditionally here, same reasoning as the
+  // registry/email-pattern/technology-signal steps above.
+  try {
+    const phoneResult = await enrichCompanyPhoneFromWebsite(companyId);
+    if (phoneResult.attempted) stepsCompleted.push(STEP_PHONE_FINDER);
+  } catch (error) {
+    stepsFailed.push(STEP_PHONE_FINDER);
+    errors.push(`${STEP_PHONE_FINDER}: ${errorMessage(error)}`);
+    console.error(`[enrichment] company ${companyId} — ${STEP_PHONE_FINDER} failed:`, error);
+  }
+
+  try {
+    const sizeResult = await enrichCompanySizeFromFmp(companyId);
+    if (sizeResult.attempted) stepsCompleted.push(STEP_COMPANY_SIZE_FINDER);
+  } catch (error) {
+    stepsFailed.push(STEP_COMPANY_SIZE_FINDER);
+    errors.push(`${STEP_COMPANY_SIZE_FINDER}: ${errorMessage(error)}`);
+    console.error(`[enrichment] company ${companyId} — ${STEP_COMPANY_SIZE_FINDER} failed:`, error);
+  }
+
+  try {
+    const fundingResult = await enrichCompanyFundingFromEdgar(companyId);
+    if (fundingResult.attempted) stepsCompleted.push(STEP_FUNDING_FINDER);
+  } catch (error) {
+    stepsFailed.push(STEP_FUNDING_FINDER);
+    errors.push(`${STEP_FUNDING_FINDER}: ${errorMessage(error)}`);
+    console.error(`[enrichment] company ${companyId} — ${STEP_FUNDING_FINDER} failed:`, error);
+  }
+
+  if (!isAIConnected()) {
+    const status = finalStatus(stepsCompleted, stepsFailed);
+    run = await prisma.enrichmentRun.update({
+      where: { id: run.id },
+      data: {
+        status,
+        stepsCompleted,
+        stepsFailed,
+        error: ["AI provider not configured — AI-dependent steps skipped.", ...errors].join(" | "),
+        finishedAt: new Date(),
+      },
+    });
+    await prisma.company.update({
+      where: { id: companyId },
+      data: status === "FAILED" ? { enrichmentStatus: "FAILED", enrichmentFailureReason: "AI provider not configured" } : { enrichmentStatus: status, lastEnrichedAt: new Date() },
+    });
+    console.warn(`[enrichment] company ${companyId}: AI not configured — real non-AI steps [${stepsCompleted.join(", ") || "none"}], status ${status}`);
+    return { run, status };
+  }
 
   // Evidence step: converts an ALREADY-EXISTING WebsiteScan (from the
   // Website Scanner feature or a prior run) into real CompanyEvidence rows
@@ -412,16 +497,45 @@ export async function enrichContact(contactId: string, options: EnrichContactOpt
     });
   }
 
+  // Real multi-provider email verification (src/lib/enrichment/
+  // email-waterfall.ts) — never an AI call, so it runs unconditionally here,
+  // same reasoning as enrichCompany's registry/email-pattern steps above.
+  // Best-effort: a provider outage must never fail the rest of contact
+  // enrichment, which has already genuinely succeeded by this point.
+  let emailVerificationAttempted = false;
+  try {
+    const verification = await verifyContactEmailWaterfall(contactId);
+    emailVerificationAttempted = verification.providerUsed !== null;
+  } catch (error) {
+    console.error(`[enrichment] contact ${contactId} — email verification failed:`, error);
+  }
+
+  // Real, low-cost phone/LinkedIn finder (Prospeo) — best-effort, never
+  // blocks the rest of contact enrichment, which has already genuinely
+  // succeeded by this point.
+  let phoneOrLinkedinFound = false;
+  try {
+    const finderResult = await enrichContactPhoneAndLinkedIn(contactId);
+    phoneOrLinkedinFound = finderResult.phoneFound || finderResult.linkedinFound;
+  } catch (error) {
+    console.error(`[enrichment] contact ${contactId} — ${STEP_PHONE_FINDER} failed:`, error);
+  }
+
   run = await prisma.enrichmentRun.update({
     where: { id: run.id },
     data: {
       status: "COMPLETED",
-      stepsCompleted: ["SENIORITY_ESTIMATE", ...(matched ? ["DECISION_MAKER_LINK"] : [])],
+      stepsCompleted: [
+        "SENIORITY_ESTIMATE",
+        ...(matched ? ["DECISION_MAKER_LINK"] : []),
+        ...(emailVerificationAttempted ? ["EMAIL_VERIFICATION"] : []),
+        ...(phoneOrLinkedinFound ? [STEP_PHONE_FINDER] : []),
+      ],
       finishedAt: new Date(),
     },
   });
 
-  console.log(`[enrichment] contact ${contactId}: COMPLETED — seniority=${seniority ?? "unknown"}, decisionMaker=${matched?.id ?? "none"}`);
+  console.log(`[enrichment] contact ${contactId}: COMPLETED — seniority=${seniority ?? "unknown"}, decisionMaker=${matched?.id ?? "none"}, emailVerified=${emailVerificationAttempted}`);
 
   return { run, status: "COMPLETED", matchedDecisionMakerId: matched?.id ?? null };
 }

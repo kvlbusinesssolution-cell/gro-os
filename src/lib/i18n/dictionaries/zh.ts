@@ -21,6 +21,8 @@ export const zh: Dictionary = {
   "nav.growthEngine": "增长引擎",
   "nav.websiteScanner": "网站扫描器",
   "nav.outreach": "外联",
+  "nav.marketing": "营销",
+  "nav.businessGrowth": "业务增长",
   "nav.crm": "客户关系管理",
   "nav.projects": "项目",
   "nav.delivery": "交付",

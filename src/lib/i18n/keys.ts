@@ -33,6 +33,8 @@ export const en = {
   "nav.growthEngine": "Growth Engine",
   "nav.websiteScanner": "Website Scanner",
   "nav.outreach": "Outreach",
+  "nav.marketing": "Marketing",
+  "nav.businessGrowth": "Business Growth",
   "nav.crm": "CRM",
   "nav.projects": "Projects",
   "nav.delivery": "Delivery",

@@ -91,6 +91,7 @@ export async function buildAlternativeTimeDraft(interviewId: string, mode: "SUGG
   let slotsText = "a few alternative times that work on my end";
   if (interview.scheduledAtUtc) {
     const input: AvailabilityCheckInput = {
+      organizationId: interview.organizationId,
       careerProfileId: interview.careerProfileId,
       proposedStartUtc: interview.scheduledAtUtc,
       durationMinutes: interview.durationMinutes ?? 60,

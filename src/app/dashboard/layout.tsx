@@ -4,6 +4,7 @@ import { cookies, headers } from "next/headers";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getAIConnectionStatus } from "@/lib/ai/status";
+import { getGrowthTokenAvailability } from "@/lib/billing/growth-tokens";
 import { EXECUTIVE_AGENT_TYPES } from "@/lib/ai/personas";
 import { Container } from "@/components/ui/container";
 import { CommandPalette } from "@/components/command-center/command-palette";
@@ -21,6 +22,7 @@ import { ThemeToggle } from "./_components/theme-toggle";
 import { LocaleSelector } from "./_components/locale-selector";
 import { WorkspaceSwitcher, type SwitchableOrg } from "./_components/workspace-switcher";
 import { AiStatusBadge } from "./_components/ai-status-badge";
+import { GrowthTokenBadge } from "./_components/growth-token-badge";
 import { LiveMeetingBadge } from "./_components/live-meeting-badge";
 import { ProfileMenu } from "./_components/profile-menu";
 import { ActivityBar, type ActivityBarItem } from "./_components/activity-bar";
@@ -75,12 +77,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const preferredOrgId = cookieStore.get(ACTIVE_ORG_COOKIE)?.value;
   const activeMembership = memberships.find((m) => m.organizationId === preferredOrgId) ?? memberships[0];
   const organizationId = activeMembership.organizationId;
+  const isCareerOrg = activeMembership.organization.type === "CAREER";
 
   const [
     notifications,
     unreadCount,
     preference,
     aiStatus,
+    tokenAvailability,
     liveMeeting,
     recentActivities,
     quickActionAgents,
@@ -95,6 +99,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       prisma.notification.count({ where: { userId, read: false } }),
       prisma.userPreference.findUnique({ where: { userId } }),
       getAIConnectionStatus(),
+      getGrowthTokenAvailability(organizationId),
       prisma.meeting.findFirst({ where: { organizationId, status: "LIVE" }, select: { id: true, title: true } }),
       prisma.activity.findMany({
         where: { organizationId },
@@ -112,8 +117,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
         select: { user: { select: { id: true, name: true } } },
         orderBy: { createdAt: "asc" },
       }),
-      prisma.company.findMany({ where: { organizationId }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
-      prisma.client.findMany({ where: { organizationId, status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+      isCareerOrg ? Promise.resolve([]) : prisma.company.findMany({ where: { organizationId }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
+      isCareerOrg ? Promise.resolve([]) : prisma.client.findMany({ where: { organizationId, status: "ACTIVE" }, orderBy: { name: "asc" }, select: { id: true, name: true } }),
       prisma.user.findUnique({ where: { id: userId }, select: { emailVerified: true } }),
       getEffectiveBranding(organizationId),
     ]);
@@ -179,6 +184,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
           <div className="flex shrink-0 items-center gap-2">
             <LiveMeetingBadge meeting={liveMeeting} />
+            <GrowthTokenBadge unlimited={tokenAvailability.unlimited} remainingTokens={tokenAvailability.unlimited ? 0 : tokenAvailability.remainingTokens} />
             <AiStatusBadge status={aiStatus} />
             <LocaleSelector initialLocale={locale} />
             <ThemeToggle />
@@ -195,18 +201,20 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
       <div className="flex flex-1">
         <aside className="hidden w-60 shrink-0 border-r border-border lg:block">
-          <DashboardSidebar />
+          <DashboardSidebar organizationType={activeMembership.organization.type} />
         </aside>
         <main id="main-content" className="min-w-0 flex-1 pb-16">{children}</main>
       </div>
 
       <ActivityBar items={activityItems} />
-      <QuickActions
-        agents={quickActionAgents}
-        users={quickActionMemberships.map((m) => m.user)}
-        companies={quickActionCompanies}
-        clients={quickActionClients}
-      />
+      {!isCareerOrg && (
+        <QuickActions
+          agents={quickActionAgents}
+          users={quickActionMemberships.map((m) => m.user)}
+          companies={quickActionCompanies}
+          clients={quickActionClients}
+        />
+      )}
     </div>
     </TranslationProvider>
   );

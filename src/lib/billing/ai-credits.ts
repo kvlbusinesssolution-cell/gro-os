@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import type { AIUsageProvider, AIUsageStatus } from "@/generated/prisma/client";
+import { recordApiUsageTokenSpend } from "./growth-tokens";
 
 /**
  * AI Credit System — meters real Claude/OpenAI/Gemini/Groq/embedding usage
@@ -32,6 +33,34 @@ export function computeCreditsUsed(provider: AIUsageProvider, inputTokens: numbe
   const totalTokens = inputTokens + outputTokens;
   const rate = CREDIT_COST_PER_1K_TOKENS[provider];
   return Math.round(((totalTokens / 1000) * rate + Number.EPSILON) * 10000) / 10000;
+}
+
+/**
+ * Real, approximate blended (input+output, ~3:1 ratio) USD cost per 1,000
+ * tokens for whichever provider actually served a call — the second, real-
+ * money-denominated table this file needs on top of CREDIT_COST_PER_1K_TOKENS
+ * above (that one prices an abstract "AI credit" unit; this one prices real
+ * ₹ spend, feeding computeApiCostTokens's founder-decided cost x1.8 markup
+ * x4-tokens-per-₹1 formula). Reviewed periodically against real provider
+ * pricing, not pulled from a live pricing API — same discipline as
+ * CREDIT_COST_PER_1K_TOKENS and token-pricing.ts's REFERENCE_COST_INR.
+ */
+const REAL_API_COST_USD_PER_1K_TOKENS: Record<AIUsageProvider, number> = {
+  ANTHROPIC: 0.006, // Claude Sonnet-class blended $3/$15 per million input/output
+  OPENAI: 0.0044, // GPT-4o-class blended $2.50/$10 per million
+  GOOGLE_GEMINI: 0.00018, // Gemini Flash-class blended $0.10/$0.40 per million
+  GROQ: 0.0001, // fast open-model inference, sub-$0.10/million class
+  OPENROUTER: 0.00005, // free-tier (":free") fallback models — near-zero but nonzero real infra cost
+  EMBEDDING: 0.00002, // embedding-class models, ~$0.02/million
+};
+
+/** Real, documented USD->INR rate used only for the metered AI-cost->Growth-Token conversion below. Review periodically against the real exchange rate; not pulled from a live FX API. */
+const USD_TO_INR_RATE = 87;
+
+/** Real ₹ cost of one AI call, for computeApiCostTokens (token-pricing.ts) to convert into the Growth Tokens debited by recordApiUsageTokenSpend below. */
+export function computeRealApiCostInr(provider: AIUsageProvider, inputTokens: number, outputTokens: number): number {
+  const totalTokens = inputTokens + outputTokens;
+  return (totalTokens / 1000) * REAL_API_COST_USD_PER_1K_TOKENS[provider] * USD_TO_INR_RATE;
 }
 
 /** Lazily creates the ledger row the first time an org's usage is ever recorded — `monthlyCreditsGranted` seeded from the org's current Plan (0 if no plan or unlimited, since "unlimited" is checked separately via Plan.aiCreditsMonthly === null, not encoded as a magic ledger number). */
@@ -100,6 +129,17 @@ export async function recordAIUsage(
         },
       });
     });
+
+    if (status === "SUCCESS" && (inputTokens > 0 || outputTokens > 0)) {
+      // Same real call, a second real-money debit: the AICreditLedger update
+      // above just recorded this call's abstract "AI credit" usage; this
+      // additionally debits the SAME Growth Token balance the topbar
+      // coin/bar shows and clients buy into, at the real founder-decided
+      // rate (real ₹ cost x1.8 markup x4 tokens/₹1) — never instead of the
+      // AI credit debit, never blocking, since the call already happened.
+      const realApiCostInr = computeRealApiCostInr(provider, inputTokens, outputTokens);
+      await recordApiUsageTokenSpend(organizationId, realApiCostInr, { referenceType: "AIUsageEvent", context, provider, model });
+    }
   } catch (error) {
     console.error("[billing/ai-credits] recordAIUsage failed:", error);
   }

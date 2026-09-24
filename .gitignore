@@ -62,4 +62,7 @@ next-env.d.ts
 
 # uploaded career resumes — real user files, never checked in
 /storage/career-resumes
+
+# generated career CVs (CV Builder) — real user files, never checked in
+/storage/career-cvs
 __pycache__/

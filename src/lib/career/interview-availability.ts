@@ -1,31 +1,29 @@
 import { prisma } from "@/lib/prisma";
+import { getGoogleCalendarFreeBusy } from "@/lib/integrations/calendar/google-calendar-events";
 
 /**
  * Phase 21 (§18, §19, §20, §55) — real availability/conflict checking.
  *
- * Honest architecture note (Phase 20's own audit, re-confirmed here): this
- * codebase has NO connected calendar-provider integration anywhere.
- * `IntegrationProviderKey` lists GOOGLE_CALENDAR/MICROSOFT_CALENDAR/CAL_COM/
- * CALENDLY, and `src/lib/integrations/providers/cal-com.ts` /
- * `calendly.ts` exist — but both are ONLY connection/health-check adapters
- * (API-key verification), with no read-availability/create-event/
- * cancel-event methods, and grepping `src/app` for any usage of either
- * shows they are not wired into any UI or action anywhere. There is no
- * `CalendarEvent` model. So a genuine external-calendar conflict check is
- * MISSING/BLOCKED in this codebase today — this file does NOT fabricate
- * one.
+ * Update: a genuine external-calendar conflict check is no longer
+ * unconditionally missing — when the org has a real connected
+ * GOOGLE_CALENDAR integration (src/lib/integrations/calendar/
+ * google-calendar-events.ts), this now also checks real Google Calendar
+ * free/busy data for the proposed slot. It remains honestly UNKNOWN/
+ * GrowthOS-only whenever no calendar is connected — never fabricated.
+ * MICROSOFT_CALENDAR/CAL_COM/CALENDLY remain connection-only adapters with
+ * no real read-availability method — out of scope for this pass.
  *
- * What IS real: checking a candidate's OWN previously-scheduled
- * CareerInterview rows (this app's own source of truth for interviews it
- * already knows about) against a proposed new slot, plus real
- * user-configured working hours/blackout periods (§19) on CareerProfile.
- * When no working hours are configured, this never invents availability —
- * it returns UNKNOWN rather than guessing free/busy.
+ * What IS always real regardless of calendar connection: checking a
+ * candidate's OWN previously-scheduled CareerInterview rows (this app's own
+ * source of truth for interviews it already knows about) against a
+ * proposed new slot, plus real user-configured working hours/blackout
+ * periods (§19) on CareerProfile.
  */
 
 export type AvailabilityStatus = "FREE" | "BUSY" | "OUTSIDE_WORKING_HOURS" | "BLACKOUT" | "UNKNOWN";
 
 export interface AvailabilityCheckInput {
+  organizationId: string;
   careerProfileId: string;
   proposedStartUtc: Date;
   durationMinutes: number;
@@ -98,11 +96,37 @@ export async function checkInterviewConflict(input: AvailabilityCheckInput): Pro
     }
   }
 
-  if (!input.workingHoursStart || !input.workingHoursTimezone) {
-    return { status: "UNKNOWN", conflictingInterviewId: null, detail: "No working hours configured and no connected external calendar — cannot confirm this slot is genuinely free, only that it doesn't conflict with interviews already tracked in GrowthOS." };
+  // Real external-calendar check — only evaluated when the org actually has
+  // a connected GOOGLE_CALENDAR integration; getGoogleCalendarFreeBusy
+  // returns null (not an empty array) when there's no connection, so this
+  // never mistakes "not connected" for "genuinely free".
+  const busyIntervals = await getGoogleCalendarFreeBusy(input.organizationId, input.proposedStartUtc, proposedEnd);
+  const calendarConnected = busyIntervals !== null;
+  if (busyIntervals) {
+    for (const interval of busyIntervals) {
+      if (overlaps(input.proposedStartUtc, proposedEnd, interval.startUtc, interval.endUtc)) {
+        return { status: "BUSY", conflictingInterviewId: null, detail: "Overlaps a real event on the connected Google Calendar." };
+      }
+    }
   }
 
-  return { status: "FREE", conflictingInterviewId: null, detail: "No conflict with tracked interviews, blackout periods, or configured working hours. No external calendar is connected, so this reflects GrowthOS's own records only." };
+  if (!input.workingHoursStart || !input.workingHoursTimezone) {
+    return {
+      status: "UNKNOWN",
+      conflictingInterviewId: null,
+      detail: calendarConnected
+        ? "No conflict on the connected Google Calendar, but no working hours are configured — cannot fully confirm this slot is genuinely free."
+        : "No working hours configured and no connected external calendar — cannot confirm this slot is genuinely free, only that it doesn't conflict with interviews already tracked in GrowthOS.",
+    };
+  }
+
+  return {
+    status: "FREE",
+    conflictingInterviewId: null,
+    detail: calendarConnected
+      ? "No conflict with tracked interviews, blackout periods, configured working hours, or the connected Google Calendar."
+      : "No conflict with tracked interviews, blackout periods, or configured working hours. No external calendar is connected, so this reflects GrowthOS's own records only.",
+  };
 }
 
 /**

@@ -55,6 +55,7 @@ export interface CompanyEditFormFields {
   growthRate: string;
   fundingStage: string;
   fundingAmount: string;
+  fundingDate: string;
   language: string;
   referralPartnerId: string;
 }
@@ -129,6 +130,7 @@ export function CompanyEditForm({
         foundedYear: fields.foundedYear ? Number(fields.foundedYear) : undefined,
         growthRate: fields.growthRate ? Number(fields.growthRate) : undefined,
         fundingAmount: fields.fundingAmount ? Number(fields.fundingAmount) : undefined,
+        fundingDate: fields.fundingDate || undefined,
         technologies: splitTags(fields.technologies),
         products: splitTags(fields.products),
         servicesOffered: splitTags(fields.servicesOffered),
@@ -335,6 +337,14 @@ export function CompanyEditForm({
                       min={0}
                       value={fields.fundingAmount}
                       onChange={(e) => set("fundingAmount", e.target.value)}
+                    />
+                  </FormField>
+                  <FormField label="Funding date" htmlFor="edit-funding-date">
+                    <Input
+                      id="edit-funding-date"
+                      type="date"
+                      value={fields.fundingDate}
+                      onChange={(e) => set("fundingDate", e.target.value)}
                     />
                   </FormField>
                   <FormField label="Target customers" htmlFor="edit-target-customers" className="sm:col-span-3">

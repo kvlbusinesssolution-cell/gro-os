@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import {
   DollarSign,
   Wallet,
@@ -63,6 +64,12 @@ const HEALTH_SUB_SCORES: Array<{ key: "business" | "sales" | "marketing" | "crm"
 
 export default async function DashboardPage() {
   const { userId, membership } = await requireActiveMembership("/dashboard");
+  // A Career-type organization (chosen once on /onboarding, see
+  // Organization.type) never sees this business command center — its real
+  // home is the Career shell instead.
+  if (membership.organization.type === "CAREER") {
+    redirect("/dashboard/career");
+  }
   const organizationId = membership.organizationId;
   const currency = membership.organization.currency;
 

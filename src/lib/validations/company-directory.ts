@@ -43,6 +43,7 @@ export const companySchema = z.object({
   growthRate: z.coerce.number().optional(),
   fundingStage: z.string().trim().max(100).optional().or(z.literal("")),
   fundingAmount: z.coerce.number().nonnegative().optional(),
+  fundingDate: z.preprocess((v) => (v === "" ? undefined : v), z.coerce.date().optional()),
   language: z.string().trim().max(50).optional().or(z.literal("")),
 
   // Attribution — which ReferralPartner (if any) referred this company in.

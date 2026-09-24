@@ -10,12 +10,45 @@ import type { EvidenceSource } from "@/generated/prisma/client";
  * observation; a web-search-derived fact is real but one hop further from
  * the primary source; an AI interpretation derived from other evidence
  * (COMPANY_INTELLIGENCE) is the least direct and ranks lowest.
+ *
+ * OPENCORPORATES/UK_COMPANIES_HOUSE (company-registry-waterfall.ts) are a
+ * real government/legal-registry filing — a genuinely higher-confidence
+ * source than any AI-derived fact, and more authoritative than a bulk CSV
+ * import, but still ranked below MANUAL: a deliberate human correction must
+ * always be able to win even over an official filing (e.g. a stale registry
+ * record for a company that has since re-registered under a new name).
+ *
+ * WAPPALYZER (technology-signal.ts) is a real, measured technology
+ * detection — same class of evidence as WEBSITE_SCAN's own detector — but
+ * ranked just below it: it's a lighter, independent lookup used only when
+ * this platform's own deeper full-render scan hasn't run yet for that
+ * company, so a real scan result should still win if one exists.
+ *
+ * COMPANY_WEBSITE (company-phone-finder.ts) is a phone number scraped
+ * directly from the company's own site — a first-party observation, same
+ * class and rank as WEBSITE_SCAN.
+ *
+ * FMP (company-size-finder.ts) and SEC_EDGAR (company-funding-finder.ts)
+ * are real third-party lookups, not first-party observations: FMP ranks
+ * with WEB_SEARCH (a real but one-hop-removed fact), while SEC_EDGAR is an
+ * authoritative US government filing — ranked with
+ * OPENCORPORATES/UK_COMPANIES_HOUSE, still below MANUAL.
+ *
+ * PROSPEO (contact-phone-linkedin-finder.ts) is a real third-party person
+ * lookup — ranked with WAPPALYZER, its closest analog on the Contact side.
  */
 const SOURCE_PRIORITY: Record<EvidenceSource, number> = {
   MANUAL: 100,
+  UK_COMPANIES_HOUSE: 95,
+  OPENCORPORATES: 95,
+  SEC_EDGAR: 95,
   CSV_IMPORT: 90,
   WEBSITE_SCAN: 80,
+  COMPANY_WEBSITE: 80,
+  WAPPALYZER: 70,
+  PROSPEO: 70,
   WEB_SEARCH: 60,
+  FMP: 60,
   COMPANY_INTELLIGENCE: 40,
 };
 

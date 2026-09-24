@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CreditCard, AlertTriangle, Users, Receipt, Repeat } from "lucide-react";
+import { CreditCard, AlertTriangle, Users, Receipt, Repeat, Calculator } from "lucide-react";
 
 import { Container } from "@/components/ui/container";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -7,6 +7,8 @@ import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/prisma";
 import { requireActiveMembership } from "../_lib/require-membership";
 import { PlanSelector } from "./_components/plan-selector";
+import { TokenPurchasePanel } from "./_components/token-purchase-panel";
+import { getGrowthTokenAvailability } from "@/lib/billing/growth-tokens";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -19,7 +21,7 @@ export default async function BillingPage() {
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
-  const [billingAccount, seatsUsed, aiCallsThisMonth] = await Promise.all([
+  const [billingAccount, seatsUsed, aiCallsThisMonth, tokenAvailability] = await Promise.all([
     prisma.billingAccount.upsert({
       where: { organizationId },
       create: { organizationId },
@@ -29,6 +31,7 @@ export default async function BillingPage() {
     prisma.activity.count({
       where: { organizationId, type: { in: ["AGENT_MESSAGE", "COMPLETED_WORK"] }, createdAt: { gte: monthStart } },
     }),
+    getGrowthTokenAvailability(organizationId),
   ]);
 
   const seatsPct = Math.min(100, Math.round((seatsUsed / billingAccount.seatsIncluded) * 100));
@@ -56,6 +59,14 @@ export default async function BillingPage() {
             seat limit immediately without ever charging a card.
           </p>
         </div>
+
+        <TokenPurchasePanel
+          unlimited={tokenAvailability.unlimited}
+          remainingTokens={tokenAvailability.unlimited ? 0 : tokenAvailability.remainingTokens}
+          monthlyTokensGranted={tokenAvailability.monthlyTokensGranted}
+          monthlyTokensUsed={tokenAvailability.monthlyTokensUsed}
+          purchasedTokensRemaining={tokenAvailability.purchasedTokensRemaining}
+        />
 
         <Card glass>
           <CardHeader className="flex-row items-center justify-between">
@@ -98,6 +109,24 @@ export default async function BillingPage() {
             </CardHeader>
           </Card>
         </div>
+
+        {membership.organization.isOwnerOrg ? (
+          <Card glass>
+            <CardHeader className="flex-row items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Calculator className="size-4" /> Token Pricing Calculator
+                </CardTitle>
+                <CardDescription>
+                  Owner-only: the real reference-cost-to-token-price methodology behind every Growth Token charge.
+                </CardDescription>
+              </div>
+              <Button asChild variant="secondary" size="sm">
+                <Link href="/dashboard/billing/token-pricing">Open</Link>
+              </Button>
+            </CardHeader>
+          </Card>
+        ) : null}
 
         <PlanSelector currentPlan={billingAccount.plan} canManage={canManage} />
 

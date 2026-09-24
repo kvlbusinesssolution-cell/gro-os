@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 
+import { prisma } from "@/lib/prisma";
 import { getSiteUrl } from "@/lib/site-config";
 
 const BASE_URL = getSiteUrl();
@@ -13,12 +14,27 @@ const PUBLIC_PAGES: { path: string; changeFrequency: MetadataRoute.Sitemap[numbe
   { path: "/cookies", changeFrequency: "yearly", priority: 0.3 },
 ];
 
-export default function sitemap(): MetadataRoute.Sitemap {
+/** First DB-driven sitemap entries in this codebase — every real PUBLISHED Business Listing (src/app/listings/[slug]/page.tsx), the actual local-SEO surface this section exists to build. Only PUBLISHED, matching that page's own access check. */
+export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const lastModified = new Date();
-  return PUBLIC_PAGES.map(({ path, changeFrequency, priority }) => ({
+
+  const staticEntries: MetadataRoute.Sitemap = PUBLIC_PAGES.map(({ path, changeFrequency, priority }) => ({
     url: `${BASE_URL}${path}`,
     lastModified,
     changeFrequency,
     priority,
   }));
+
+  const listings = await prisma.businessListing.findMany({
+    where: { status: "PUBLISHED" },
+    select: { slug: true, updatedAt: true },
+  });
+  const listingEntries: MetadataRoute.Sitemap = listings.map((listing) => ({
+    url: `${BASE_URL}/listings/${listing.slug}`,
+    lastModified: listing.updatedAt,
+    changeFrequency: "weekly",
+    priority: 0.7,
+  }));
+
+  return [...staticEntries, ...listingEntries];
 }

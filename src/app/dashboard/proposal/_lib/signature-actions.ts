@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 
 import { prisma } from "@/lib/prisma";
 import { logActivity } from "@/lib/activity";
+import { logAudit } from "@/lib/audit";
 import { notifyOrganizationOwners } from "@/lib/notifications";
 import { evaluateAutomationRules } from "@/lib/automation-engine";
 import { fireWorkflowTrigger } from "@/lib/workflows/triggers";
@@ -98,6 +99,18 @@ export async function submitManualSignature(token: string, input: ManualSignatur
     await markParentDocumentSigned(signature.docKind, signature.docId);
 
     const documentTitle = (await resolveDocumentTitle(signature.docKind, signature.docId)) ?? "a document";
+
+    // Tamper-evident compliance record, distinct from logActivity's
+    // UI-facing feed below — a legally significant event (an e-signature,
+    // with the signer's real IP) with no logged-in userId (the signer is a
+    // public token-holder, not an app user).
+    await logAudit({
+      userId: null,
+      organizationId: signature.organizationId,
+      action: "document.signed",
+      ipAddress: ip,
+      metadata: { docKind: signature.docKind, docId: signature.docId, signerName: parsed.data.signerName, signerEmail: signature.signerEmail },
+    });
 
     await logActivity({
       organizationId: signature.organizationId,

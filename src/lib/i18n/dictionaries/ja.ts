@@ -21,6 +21,8 @@ export const ja: Dictionary = {
   "nav.growthEngine": "グロースエンジン",
   "nav.websiteScanner": "ウェブサイトスキャナー",
   "nav.outreach": "アウトリーチ",
+  "nav.marketing": "マーケティング",
+  "nav.businessGrowth": "ビジネス成長",
   "nav.crm": "CRM",
   "nav.projects": "プロジェクト",
   "nav.delivery": "デリバリー",

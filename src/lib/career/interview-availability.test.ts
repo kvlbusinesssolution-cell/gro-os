@@ -7,6 +7,7 @@ import { checkInterviewConflict, suggestAlternativeSlots, type AvailabilityCheck
 
 function baseInput(overrides: Partial<AvailabilityCheckInput> = {}): AvailabilityCheckInput {
   return {
+    organizationId: "org-does-not-exist",
     careerProfileId: "profile-does-not-exist",
     proposedStartUtc: new Date("2026-10-05T10:00:00Z"), // a Monday
     durationMinutes: 60,
@@ -81,26 +82,26 @@ describe("checkInterviewConflict — §18/§20/§55 real double-booking check ag
   });
 
   it("detects a real overlap with an already-SCHEDULED CareerInterview", async () => {
-    const result = await checkInterviewConflict(baseInput({ careerProfileId, proposedStartUtc: new Date("2026-10-06T10:30:00Z") }));
+    const result = await checkInterviewConflict(baseInput({ organizationId, careerProfileId, proposedStartUtc: new Date("2026-10-06T10:30:00Z") }));
     expect(result.status).toBe("BUSY");
     expect(result.conflictingInterviewId).toBe(existingInterviewId);
   });
 
   it("does not flag a slot that genuinely doesn't overlap", async () => {
-    const result = await checkInterviewConflict(baseInput({ careerProfileId, proposedStartUtc: new Date("2026-10-06T14:00:00Z"), workingHoursStart: "09:00", workingHoursEnd: "17:00", workingHoursTimezone: "UTC", workingDays: [1, 2, 3, 4, 5] }));
+    const result = await checkInterviewConflict(baseInput({ organizationId, careerProfileId, proposedStartUtc: new Date("2026-10-06T14:00:00Z"), workingHoursStart: "09:00", workingHoursEnd: "17:00", workingHoursTimezone: "UTC", workingDays: [1, 2, 3, 4, 5] }));
     expect(result.status).toBe("FREE");
   });
 
   it("excludeInterviewId lets rescheduling the SAME interview skip its own conflict", async () => {
-    const result = await checkInterviewConflict(baseInput({ careerProfileId, proposedStartUtc: new Date("2026-10-06T10:30:00Z"), excludeInterviewId: existingInterviewId }));
+    const result = await checkInterviewConflict(baseInput({ organizationId, careerProfileId, proposedStartUtc: new Date("2026-10-06T10:30:00Z"), excludeInterviewId: existingInterviewId }));
     expect(result.status).not.toBe("BUSY");
   });
 
   it("§24 — suggestAlternativeSlots never fabricates a slot; every suggestion is independently re-checked FREE", async () => {
-    const alternatives = await suggestAlternativeSlots(baseInput({ careerProfileId, workingHoursStart: "09:00", workingHoursEnd: "17:00", workingHoursTimezone: "UTC", workingDays: [1, 2, 3, 4, 5], proposedStartUtc: new Date("2026-10-06T09:00:00Z") }));
+    const alternatives = await suggestAlternativeSlots(baseInput({ organizationId, careerProfileId, workingHoursStart: "09:00", workingHoursEnd: "17:00", workingHoursTimezone: "UTC", workingDays: [1, 2, 3, 4, 5], proposedStartUtc: new Date("2026-10-06T09:00:00Z") }));
     expect(alternatives.length).toBeGreaterThan(0);
     for (const slot of alternatives) {
-      const check = await checkInterviewConflict(baseInput({ careerProfileId, proposedStartUtc: slot, workingHoursStart: "09:00", workingHoursEnd: "17:00", workingHoursTimezone: "UTC", workingDays: [1, 2, 3, 4, 5] }));
+      const check = await checkInterviewConflict(baseInput({ organizationId, careerProfileId, proposedStartUtc: slot, workingHoursStart: "09:00", workingHoursEnd: "17:00", workingHoursTimezone: "UTC", workingDays: [1, 2, 3, 4, 5] }));
       expect(check.status).toBe("FREE");
     }
   });

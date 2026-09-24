@@ -21,6 +21,8 @@ export const ur: Dictionary = {
   "nav.growthEngine": "گروتھ انجن",
   "nav.websiteScanner": "ویب سائٹ اسکینر",
   "nav.outreach": "آؤٹ ریچ",
+  "nav.marketing": "مارکیٹنگ",
+  "nav.businessGrowth": "کاروباری ترقی",
   "nav.crm": "سی آر ایم",
   "nav.projects": "پراجیکٹس",
   "nav.delivery": "ترسیل",

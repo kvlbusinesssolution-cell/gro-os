@@ -141,6 +141,7 @@ model User {
   marketplaceInstallsRemoved  MarketplaceInstall[]  @relation("MarketplaceUninstalledBy")
   marketplaceReviews          MarketplaceReview[]   @relation("MarketplaceReviewAuthor")
   marketplaceOrdersPurchased  MarketplaceOrder[]    @relation("MarketplaceOrderBuyer")
+  growthTokenPurchases        GrowthTokenPurchase[]
   createdPromptTemplates      PromptTemplate[]      @relation("PromptTemplateCreatedBy")
   createdJobOpenings          JobOpening[]          @relation("JobOpeningCreatedBy")
   interviewsConducted         Interview[]           @relation("InterviewInterviewer")
@@ -319,6 +320,11 @@ enum CompanySize {
   SIZE_1000_PLUS
 }
 
+enum OrganizationType {
+  BUSINESS
+  CAREER
+}
+
 enum MembershipRole {
   OWNER
   ADMIN
@@ -349,6 +355,20 @@ enum InvitationStatus {
 model Organization {
   id   String @id @default(cuid())
   slug String @unique
+
+  // Signup-time account type — decides which post-login home/dashboard this
+  // organization's members see (src/app/dashboard/layout.tsx +
+  // _components/sidebar.tsx): BUSINESS gets the full CRM/outreach/proposal
+  // command center, CAREER gets the job-seeker-only shell (Career, Learning,
+  // Billing, Settings). Chosen once on /onboarding's first screen
+  // (chooseAccountType in src/app/onboarding/actions.ts) — never changed
+  // automatically afterward. Defaults to BUSINESS for pre-existing rows
+  // (backfilled by this field's own migration); accountTypeConfirmed
+  // defaults to true for the same reason, but createOrContinueOrganization
+  // explicitly passes false for a brand new signup so the choice screen
+  // shows before anything else in the wizard.
+  type                 OrganizationType @default(BUSINESS)
+  accountTypeConfirmed Boolean          @default(true)
 
   name               String
   logo               String?
@@ -537,6 +557,10 @@ model Organization {
   platformPayments           PlatformPayment[]
   usageRecords               UsageRecord[]
   aiUsageEvents              AIUsageEvent[]
+  growthTokenUsageEvents     GrowthTokenUsageEvent[]
+  businessListings           BusinessListing[]
+  marketingLandingPages      MarketingLandingPage[]
+  dataProviderCallLogs       DataProviderCallLog[]
   licenses                   License[]
   whiteLabelSettings         WhiteLabelSettings?
   featureOverrides           OrganizationFeatureOverride[]
@@ -567,6 +591,7 @@ model Organization {
   marketplaceInstalls  MarketplaceInstall[]
   marketplaceReviews   MarketplaceReview[]
   marketplaceOrders    MarketplaceOrder[]
+  growthTokenPurchases GrowthTokenPurchase[]
   promptTemplates      PromptTemplate[]
   jobOpenings          JobOpening[]
   candidates           Candidate[]
@@ -3027,17 +3052,19 @@ model BillingAccount {
   canceledAt            DateTime?
   pausedAt              DateTime?
 
-  organization      Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  invoices          PlatformInvoice[]
-  payments          PlatformPayment[]
-  paymentMethods    PaymentMethod[]
-  billingAddress    BillingAddress?
-  taxProfile        TaxProfile?
-  usageRecords      UsageRecord[]
-  aiUsageEvents     AIUsageEvent[]
-  aiCreditLedger    AICreditLedger?
-  couponRedemptions CouponRedemption[]
-  licenses          License[]
+  organization           Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  invoices               PlatformInvoice[]
+  payments               PlatformPayment[]
+  paymentMethods         PaymentMethod[]
+  billingAddress         BillingAddress?
+  taxProfile             TaxProfile?
+  usageRecords           UsageRecord[]
+  aiUsageEvents          AIUsageEvent[]
+  aiCreditLedger         AICreditLedger?
+  growthTokenLedger      GrowthTokenLedger?
+  growthTokenUsageEvents GrowthTokenUsageEvent[]
+  couponRedemptions      CouponRedemption[]
+  licenses               License[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3091,6 +3118,11 @@ model Plan {
   userLimit             Int?
   workspaceLimit        Int?
   aiCreditsMonthly      Int?
+  // Monthly Growth Token allotment (src/lib/billing/growth-tokens.ts) — same
+  // nullable-means-unlimited convention as aiCreditsMonthly, distinct token
+  // pool gating the Business Listings feature (src/lib/listings/), never
+  // shared with AI credits.
+  growthTokensMonthly   Int?
   storageMbLimit        Int?
   projectLimit          Int?
   clientLimit           Int?
@@ -3180,15 +3212,17 @@ model PlatformInvoice {
   pdfStorageKey    String?               @db.Text
   notes            String?               @db.Text
 
-  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  billingAccount   BillingAccount        @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
-  items            PlatformInvoiceItem[]
-  payments         PlatformPayment[]
+  organization        Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount      BillingAccount        @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+  items               PlatformInvoiceItem[]
+  payments            PlatformPayment[]
   // A marketplace purchase is just another PlatformInvoice under the
   // buyer's existing BillingAccount — refundPlatformPayment(), issueCreditNote(),
   // and every existing invoice-list UI keep working completely unmodified.
   // Reverse side of MarketplaceOrder.platformInvoiceId.
-  marketplaceOrder MarketplaceOrder?
+  marketplaceOrder    MarketplaceOrder?
+  // Reverse side of GrowthTokenPurchase.platformInvoiceId.
+  growthTokenPurchase GrowthTokenPurchase?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3383,9 +3417,13 @@ model AIUsageEvent {
   outputTokens     Int             @default(0)
   creditsUsed      Float
   context          String?
-  /** Phase 27: SUCCESS for every pre-existing row and every call recorded the original way (still the majority — most call sites only ever record success). FAILED rows are new (see fallback.ts's runChain) — a genuinely failed attempt, 0 tokens/credits since nothing was actually generated. */
+  /**
+   * Phase 27: SUCCESS for every pre-existing row and every call recorded the original way (still the majority — most call sites only ever record success). FAILED rows are new (see fallback.ts's runChain) — a genuinely failed attempt, 0 tokens/credits since nothing was actually generated.
+   */
   status           AIUsageStatus   @default(SUCCESS)
-  /** Real wall-clock duration of this attempt, in milliseconds. Null for call sites not yet updated to pass it through (additive rollout, not yet universal — see fallback.ts's doc comment). */
+  /**
+   * Real wall-clock duration of this attempt, in milliseconds. Null for call sites not yet updated to pass it through (additive rollout, not yet universal — see fallback.ts's doc comment).
+   */
   latencyMs        Int?
 
   organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -3412,6 +3450,601 @@ model AICreditLedger {
   billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
 
   updatedAt DateTime @updatedAt
+}
+
+// ===== Growth Tokens — token/credit ledger for the Business Listings
+// (JustDial-style) feature and future non-AI paid features. Structural
+// mirror of AICreditLedger above, kept as a distinct LEDGER (never shared
+// storage with AI credits — AICreditLedger keeps recording its own abstract
+// per-provider credit units independently and is not replaced by this). But
+// as of AI_API_USAGE below, real metered AI cost ALSO debits this same
+// Growth Token balance (the one the topbar coin/bar shows and clients buy
+// into), per founder decision (2026-09) that every paid action — flat-fee
+// feature or metered AI spend — draws from one visible token wallet.
+// isOwnerOrg (KVL) is always unlimited, enforced in
+// src/lib/billing/growth-tokens.ts, never encoded here. =====
+
+enum GrowthTokenAction {
+  LISTING_PUBLISH
+  DEAL_POST
+  LISTING_FEATURE // self-serve boosted/featured placement — see featureListing in listing-actions.ts
+  CATALOG_ITEM_PUBLISH // publishing one product/service catalog item — see publishCatalogItem in catalog-actions.ts
+  LANDING_PAGE_PUBLISH // publishing a marketing landing page live — see publishLandingPage in landing-page-actions.ts
+  REPUTATION_CERTIFICATE_DOWNLOAD // generating a real, dated PDF reputation certificate from a listing's own rating/review data — see downloadReputationCertificate in reputation-certificate-actions.ts
+  AD_PLACEMENT_PURCHASE // buying a real 7-day sponsored ad slot (search-results banner or listing-page banner) — see purchaseAdPlacement in ad-placement-actions.ts
+  MICROSITE_PUBLISH // publishing a real, AI-drafted-but-fact-grounded multi-page business microsite — see publishMicrosite in microsite-actions.ts
+  // Lead capture (call/WhatsApp click, enquiry form, landing-page form
+  // submission) and review submission stay FREE by explicit product
+  // decision. Adding an action here is a real billing-design task
+  // (overdraft/blocking behavior for a real inbound lead), not a one-liner.
+  AI_API_USAGE // real, metered AI provider cost for one call — see recordApiUsageTokenSpend in growth-tokens.ts and computeApiCostTokens in token-pricing.ts (real cost x1.8 markup x4 tokens/₹1). Wired from recordAIUsage (ai-credits.ts) so every real AI call debits this ledger too, alongside (not instead of) AICreditLedger.
+  SIGNUP_BONUS // the one-time 300-token welcome gift (grantSignupBonusTokens) — a CREDIT event, tokensUsed is negative (see GrowthTokenUsageEvent.tokensUsed doc comment below).
+  MANUAL_ADJUSTMENT // a platform-owner-initiated balance correction from the Admin Growth Token Management page (adjustGrowthTokensManually) — tokensUsed is negative for a grant, positive for a deduction.
+}
+
+enum GrowthTokenEventStatus {
+  SUCCESS
+  BLOCKED // action attempted, rejected for insufficient balance — never happened
+}
+
+// One row per BillingAccount — the real, current Growth Token balance.
+model GrowthTokenLedger {
+  id                       String    @id @default(cuid())
+  billingAccountId         String    @unique
+  monthlyTokensGranted     Float     @default(0)
+  monthlyTokensUsed        Float     @default(0)
+  purchasedTokensRemaining Float     @default(0)
+  periodResetAt            DateTime?
+
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  updatedAt DateTime @updatedAt
+}
+
+// One row per gated-action attempt (including BLOCKED attempts, for
+// abuse/analytics visibility) — mirrors AIUsageEvent's role, adapted from
+// provider/token-cost to a flat action cost.
+model GrowthTokenUsageEvent {
+  id               String                 @id @default(cuid())
+  organizationId   String
+  billingAccountId String
+  action           GrowthTokenAction
+  // Loose reference (no FK) to whatever entity triggered the spend, e.g.
+  // referenceType "BusinessListing" — same looseness AIUsageEvent.context
+  // already uses rather than a hard FK per referenced model.
+  referenceType    String?
+  referenceId      String?
+  // Positive for every DEBIT action (a spend — LISTING_PUBLISH, AI_API_USAGE,
+  // etc., or a MANUAL_ADJUSTMENT deduction). NEGATIVE for a CREDIT action
+  // (SIGNUP_BONUS, or a MANUAL_ADJUSTMENT grant) — so summing tokensUsed
+  // across an org's events yields its real net ledger consumption, not just
+  // its spend total.
+  tokensUsed       Float
+  context          String?
+  status           GrowthTokenEventStatus @default(SUCCESS)
+
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  billingAccount BillingAccount @relation(fields: [billingAccountId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([billingAccountId, action])
+  @@index([action, status, createdAt])
+}
+
+enum GrowthTokenPurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// A real Growth Token top-up purchase — clients/users/students paying to
+// add to GrowthTokenLedger.purchasedTokensRemaining, which is otherwise
+// only ever spent, never funded (see src/lib/billing/token-purchase.ts).
+// Mirrors MarketplaceOrder's shape and lifecycle exactly (same gateway
+// checkout -> webhook-confirmed fulfillment pattern), reusing
+// PlatformInvoice for the real money paper trail rather than a second
+// invoicing concept.
+model GrowthTokenPurchase {
+  id             String                    @id @default(cuid())
+  organizationId String
+  buyerUserId    String
+  tokens         Int
+  // Founder promo (2026-09): a flat 20% bonus on every real token purchase
+  // — snapshotted here at checkout-start time (never recomputed later if
+  // the promo rate changes), credited alongside `tokens` on fulfillment
+  // and clawed back alongside it on a real refund. 0 for a purchase made
+  // before this promo existed.
+  bonusTokens    Int                       @default(0)
+  amountCents    Int
+  currency       String
+  status         GrowthTokenPurchaseStatus @default(PENDING)
+
+  gatewayProvider          PaymentGatewayProvider?
+  gatewayCheckoutSessionId String?
+
+  platformInvoiceId String? @unique // reuse: real invoice/payment/refund lives here, same as MarketplaceOrder
+
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  buyerUser       User             @relation(fields: [buyerUserId], references: [id], onDelete: Restrict)
+  platformInvoice PlatformInvoice? @relation(fields: [platformInvoiceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId, status])
+}
+
+// ===== Business Listings — JustDial-style local-SEO directory feature.
+// Organization -> BusinessListing is 1:many (a client can have multiple
+// branches, each independently SEO'd/reviewed), unlike the 1:1
+// BillingAccount/AICreditLedger pattern above. =====
+
+enum BusinessListingStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+  SUSPENDED
+}
+
+enum BusinessReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BusinessDealStatus {
+  DRAFT
+  PUBLISHED
+  EXPIRED
+  ARCHIVED
+}
+
+enum BusinessLeadType {
+  CALL_CLICK
+  WHATSAPP_CLICK
+  ENQUIRY_FORM
+}
+
+model BusinessListing {
+  id             String                @id @default(cuid())
+  organizationId String
+  slug           String                @unique // public URL key: /listings/[slug], see src/lib/listings/slug.ts
+  status         BusinessListingStatus @default(DRAFT)
+  publishedAt    DateTime?
+
+  businessName String
+  tagline      String?
+  description  String?  @db.Text
+  category     String // primary category (free-form, not enum — directory categories are numerous/evolving)
+  categories   String[] // secondary/related category tags for search & filter
+
+  // Dedicated address columns — Organization has no structured address
+  // today (only officeLocations Json?), and a public listing needs
+  // reliably-typed fields for LocalBusiness JSON-LD + city/category browse.
+  addressLine1 String
+  addressLine2 String?
+  city         String
+  state        String?
+  postalCode   String?
+  country      String
+  latitude     Float?
+  longitude    Float?
+
+  phone          String?
+  whatsappNumber String?
+  contactEmail   String?
+  website        String?
+  openingHours   Json?
+  priceRange     String?
+  // External video URL (YouTube/Vimeo link) shown on the public listing
+  // page — no upload/transcoding infra built for this, deliberately just a
+  // link field, same spirit as `website` above.
+  videoUrl       String?
+
+  // Denormalized read-optimized counters, recomputed by the actions that
+  // change their underlying rows (moderation approve, lead insert) — never
+  // a billing source of truth, display only.
+  averageRating Float @default(0)
+  reviewCount   Int   @default(0)
+  viewCount     Int   @default(0)
+  leadCount     Int   @default(0)
+
+  metaTitle       String?
+  metaDescription String?
+  createdByUserId String?
+
+  // Platform-admin-only trust mark — never settable through any
+  // organization-scoped UI/action, same "only ever flipped by whoever
+  // operates this deployment" semantics as User.isPlatformOwner. Set via
+  // src/app/admin/business-listings.
+  isVerified Boolean @default(false)
+
+  // Self-serve paid placement (see GrowthTokenAction.LISTING_FEATURE /
+  // featureListing in listing-actions.ts). featuredUntil is the real source
+  // of truth — isFeatured is a denormalized convenience flag kept in sync by
+  // featureListing; any read that cares about current boost status should
+  // still compare featuredUntil against now rather than trust isFeatured
+  // alone across time.
+  isFeatured    Boolean   @default(false)
+  featuredUntil DateTime?
+
+  organization Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  photos       BusinessListingPhoto[]
+  reviews      BusinessReview[]
+  deals        BusinessDeal[]
+  leads        BusinessListingLead[]
+  catalogItems BusinessListingCatalogItem[]
+  dailyStats   BusinessListingDailyStat[]
+  favorites    BusinessListingFavorite[]
+  reports      BusinessListingReport[]
+  adPlacements ListingAdPlacement[]
+  microsite    BusinessMicrosite?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status, publishedAt])
+  @@index([city, category])
+}
+
+// Products/services price list — JustDial's e-catalog feature. Publishing
+// one item spends Growth Tokens (CATALOG_ITEM_PUBLISH); drafts are free,
+// mirroring the listing/deal publish pattern in listing-actions.ts.
+model BusinessListingCatalogItem {
+  id                String                    @id @default(cuid())
+  businessListingId String
+  name              String
+  description       String?                   @db.Text
+  price             Float?
+  priceUnit         String? // e.g. "per hour", "per plate", "per sq.ft" — free-form, not enum
+  photoStorageKey   String?
+  status            BusinessCatalogItemStatus @default(DRAFT)
+  publishedAt       DateTime?
+  sortOrder         Int                       @default(0)
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([businessListingId, status, sortOrder])
+}
+
+enum BusinessCatalogItemStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// One row per (listing, calendar day) — powers the owner-facing analytics
+// trend chart. BusinessListing.viewCount/leadCount above stay the lifetime
+// totals (unchanged, still the billing/display source of truth for "all
+// time"); this table is additive and exists only so the dashboard can chart
+// a trend, incremented alongside those same counters wherever they change
+// (recordListingView, captureLead, requestQuotes).
+model BusinessListingDailyStat {
+  id                String   @id @default(cuid())
+  businessListingId String
+  date              DateTime @db.Date
+  viewCount         Int      @default(0)
+  leadCount         Int      @default(0)
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  @@unique([businessListingId, date])
+  @@index([businessListingId, date])
+}
+
+// A logged-in consumer bookmarking a business — userId is a plain scalar
+// (no Prisma relation object), same convention as
+// BusinessListing.createdByUserId / BusinessListingPhoto.uploadedByUserId
+// elsewhere in this schema, so User isn't given yet another back-relation
+// array for a "who did this" reference.
+model BusinessListingFavorite {
+  id                String @id @default(cuid())
+  userId            String
+  businessListingId String
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, businessListingId])
+  @@index([userId])
+}
+
+// Public abuse/accuracy report against a listing — reviewed by the platform
+// admin (src/app/admin/business-listings), same admin-only trust-and-safety
+// pattern as BusinessListing.isVerified above, not by the listing's own
+// owner (a business shouldn't be able to dismiss reports against itself).
+model BusinessListingReport {
+  id                String                      @id @default(cuid())
+  businessListingId String
+  reason            BusinessListingReportReason
+  details           String?                     @db.Text
+  reporterEmail     String?
+  ipAddress         String?
+  status            BusinessListingReportStatus @default(PENDING)
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([businessListingId, status])
+  @@index([status, createdAt])
+}
+
+enum BusinessListingReportReason {
+  INCORRECT_INFO
+  PERMANENTLY_CLOSED
+  SPAM_OR_SCAM
+  INAPPROPRIATE_CONTENT
+  DUPLICATE
+  OTHER
+}
+
+enum BusinessListingReportStatus {
+  PENDING
+  REVIEWED
+  DISMISSED
+}
+
+enum ListingAdPlacementType {
+  SEARCH_RESULTS_BANNER
+  LISTING_PAGE_BANNER
+}
+
+// Real, dedicated sponsored-ad slots (JustDial-parity "Mobile Advertising" +
+// "Website Advertising", unified into one system since the public site is
+// already responsive — the same slot serves both). Distinct from
+// BusinessListing.isFeatured (a sort-order boost within normal search
+// results) — this is a real dedicated banner slot with its own real
+// impression/click counters, purchased with Growth Tokens
+// (AD_PLACEMENT_PURCHASE). Rotation among concurrently ACTIVE placements
+// happens in src/lib/listings/ad-rotation.ts, never a fabricated/empty slot.
+model ListingAdPlacement {
+  id                String                 @id @default(cuid())
+  businessListingId String
+  placement         ListingAdPlacementType
+  startsAt          DateTime
+  endsAt            DateTime
+  impressions       Int                    @default(0)
+  clicks            Int                    @default(0)
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([placement, startsAt, endsAt])
+  @@index([businessListingId])
+}
+
+model BusinessListingPhoto {
+  id                String  @id @default(cuid())
+  businessListingId String
+  storageKey        String // src/lib/storage/file-store.ts key, createFileStore("listing-photos")
+  caption           String?
+  sortOrder         Int     @default(0)
+  isCover           Boolean @default(false)
+  uploadedByUserId  String? // audit trail for takedown requests — no photo-moderation queue in v1
+  // Real 360°/equirectangular panorama photo — rendered with an interactive
+  // pan/zoom viewer (@photo-sphere-viewer/core) on the public listing page
+  // instead of a flat <img>. Never auto-detected — the uploader marks it
+  // explicitly, since a wrongly-flagged normal photo would render distorted.
+  is360             Boolean @default(false)
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([businessListingId, sortOrder])
+}
+
+enum BusinessMicrositeStatus {
+  DRAFT
+  PUBLISHED
+}
+
+// JustDial-parity "AI Business Website Builder" — a real, free multi-page
+// micro-site generated FROM a business's own already-published listing
+// data (never invented facts; see buildMicrositeContext in
+// src/lib/listings/microsite-generator.ts). Reuses the same structured
+// block format as MarketingLandingPage (src/lib/validations/marketing.ts)
+// rather than a second content format — one page per BusinessMicrositePage
+// row, not a single blob, so an owner can edit "About" without touching
+// "Home".
+model BusinessMicrosite {
+  id                String                  @id @default(cuid())
+  businessListingId String                  @unique
+  slug              String                  @unique // public URL: /site/[slug]
+  status            BusinessMicrositeStatus @default(DRAFT)
+  publishedAt       DateTime?
+
+  businessListing BusinessListing         @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+  pages           BusinessMicrositePage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BusinessMicrositePage {
+  id          String @id @default(cuid())
+  micrositeId String
+  // "home" | "about" | "services" | "contact" — free-form string, not an
+  // enum, so a future page type doesn't need a migration.
+  pageSlug    String
+  title       String
+  bodyBlocks  Json
+
+  microsite BusinessMicrosite @relation(fields: [micrositeId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([micrositeId, pageSlug])
+}
+
+model BusinessReview {
+  id                String               @id @default(cuid())
+  businessListingId String
+  reviewerName      String
+  reviewerEmail     String?
+  rating            Int // 1-5, range-validated in the Zod schema, not enforced at the DB layer
+  title             String?
+  body              String?              @db.Text
+  status            BusinessReviewStatus @default(PENDING)
+  ipAddress         String?
+  moderatedByUserId String?
+  moderatedAt       DateTime?
+
+  // Public reply from the business owner — shown under the review on the
+  // listing page. Independent of moderation status: a reply can be added to
+  // an APPROVED review at any time, it doesn't re-trigger moderation.
+  ownerReplyBody String?   @db.Text
+  ownerRepliedAt DateTime?
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([businessListingId, status])
+  @@index([status, createdAt])
+}
+
+model BusinessDeal {
+  id                 String             @id @default(cuid())
+  businessListingId  String
+  title              String
+  description        String?            @db.Text
+  discountLabel      String?
+  termsAndConditions String?            @db.Text
+  startsAt           DateTime?
+  endsAt             DateTime?
+  status             BusinessDealStatus @default(DRAFT)
+  publishedAt        DateTime?
+  imageStorageKey    String?
+  viewCount          Int                @default(0)
+  claimCount         Int                @default(0)
+
+  businessListing BusinessListing       @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+  leads           BusinessListingLead[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([businessListingId, status])
+  @@index([status, endsAt])
+}
+
+model BusinessListingLead {
+  id                String           @id @default(cuid())
+  businessListingId String
+  businessDealId    String?
+  type              BusinessLeadType
+  name              String?
+  email             String?
+  phone             String?
+  message           String?          @db.Text
+  ipAddress         String?
+  userAgent         String?
+  // Groups the N leads created by one "Get Quotes" submission (see
+  // requestQuotes in src/app/listings/_lib/public-actions.ts) — null for
+  // every other lead type, which stays a single independent row exactly as
+  // before.
+  quoteBatchId      String?
+
+  businessListing BusinessListing @relation(fields: [businessListingId], references: [id], onDelete: Cascade)
+  businessDeal    BusinessDeal?   @relation(fields: [businessDealId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@index([businessListingId, createdAt])
+  @@index([businessDealId])
+  @@index([quoteBatchId])
+}
+
+enum MarketingLandingPageStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+}
+
+// Real Marketing Automation landing-page builder — deliberately a
+// structured block list (bodyBlocks), never free-form HTML/WYSIWYG, same
+// lean-dependency spirit as BusinessListing above. A published page's real
+// nurture path is NOT a second automation engine: a submission creates a
+// real Contact (via findOrCreateContact, dedup.ts) tagged
+// "inbound-marketing", so it's picked up by this app's existing
+// outreach/CRM tooling rather than a parallel one.
+model MarketingLandingPage {
+  id             String                     @id @default(cuid())
+  organizationId String
+  slug           String                     @unique // public URL: /lp/[slug]
+  status         MarketingLandingPageStatus @default(DRAFT)
+  publishedAt    DateTime?
+
+  title        String
+  headline     String
+  subheadline  String?
+  heroImageUrl String?
+  // Ordered array of { type: "paragraph"|"image"|"testimonial"|"bullets",
+  // content: ... } — a structured block list a form-based dashboard editor
+  // can render/edit safely, never raw HTML (no XSS surface, no WYSIWYG
+  // dependency).
+  bodyBlocks   Json
+  // Array of { key, label, type, required } describing the embedded lead
+  // form — one form per landing page (deliberately not a separate reusable
+  // Form model for v1; a page and its one form share a lifecycle).
+  formFields   Json
+
+  // Set when this page gates a downloadable asset behind the form (a
+  // real "lead magnet") — the storage key for src/lib/storage/
+  // marketing-assets.ts, served only via the existing signed-URL route
+  // (src/app/api/files/signed/[token]/route.ts), never a public static path.
+  leadMagnetAssetKey         String?
+  leadMagnetAssetFilename    String?
+  leadMagnetAssetContentType String?
+
+  metaTitle       String?
+  metaDescription String?
+  viewCount       Int     @default(0)
+  createdByUserId String?
+
+  organization Organization               @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  leads        MarketingLandingPageLead[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+// One row per real form submission — an audit/analytics trail alongside the
+// real Contact it creates (same relationship BusinessListingLead has to
+// BusinessListing), so a landing page's raw submitted field values are
+// never lost even though the durable CRM record is the Contact.
+model MarketingLandingPageLead {
+  id                     String  @id @default(cuid())
+  marketingLandingPageId String
+  contactId              String
+  rawFieldData           Json
+  ipAddress              String?
+
+  marketingLandingPage MarketingLandingPage @relation(fields: [marketingLandingPageId], references: [id], onDelete: Cascade)
+  contact              Contact              @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([marketingLandingPageId, createdAt])
+  @@index([contactId])
 }
 
 // Global feature registry + per-org manual overrides — resolution order in
@@ -4357,6 +4990,80 @@ enum EvidenceSource {
   MANUAL
   CSV_IMPORT
   COMPANY_INTELLIGENCE
+  // Real, legal company-registry lookups (src/lib/integrations/providers/
+  // opencorporates.ts, uk-companies-house.ts) — an authoritative government/
+  // registry fact (legal name, registration number, incorporation date,
+  // status, registered address), never an AI guess, so these are always
+  // written at confidence 1.0.
+  OPENCORPORATES
+  UK_COMPANIES_HOUSE
+  // Real website technology-detection lookup (src/lib/enrichment/
+  // providers/wappalyzer.ts) — used only as a supplemental signal for a
+  // company with no WebsiteScan yet; ranked comparable to WEB_SEARCH, below
+  // WEBSITE_SCAN (this platform's own deeper, full-render detection).
+  WAPPALYZER
+  // A phone number scraped directly from the company's own website
+  // (src/lib/enrichment/company-phone-finder.ts, checks a real `tel:` link
+  // first, a visible-text pattern as fallback) — a direct first-party
+  // observation, same class of evidence as WEBSITE_SCAN.
+  COMPANY_WEBSITE
+  // Financial Modeling Prep (src/lib/enrichment/providers/fmp.ts) — real
+  // employee-count data, but only exists for publicly-traded/SEC-reporting
+  // companies (FMP's own coverage limit, never guessed for a private
+  // company). Ranked with WEB_SEARCH: a real third-party lookup, not a
+  // first-party observation.
+  FMP
+  // SEC EDGAR full-text search (src/lib/enrichment/providers/sec-edgar.ts)
+  // — a real, government-filed Form D (private placement) notice; US-only
+  // coverage. Ranked with OPENCORPORATES/UK_COMPANIES_HOUSE: an
+  // authoritative government filing, not an AI-derived guess.
+  SEC_EDGAR
+  // Prospeo's full person-enrich response (src/lib/enrichment/
+  // contact-phone-linkedin-finder.ts) — a real mobile number/LinkedIn URL
+  // lookup, same class as WAPPALYZER (a real, independent third-party
+  // provider result).
+  PROSPEO
+}
+
+// Real, per-call audit log for every external data-enrichment provider
+// request (Hunter.io, Abstract API, Prospeo, OpenCorporates, UK Companies
+// House, Wappalyzer) —
+// the waterfall's own paper trail: which provider was tried, for what
+// target, whether it succeeded, and (for quota-limited free tiers) the
+// evidence a monthly-usage count needs. Never a synchronous counter kept in
+// sync elsewhere — this append-only log IS the source of truth, same
+// discipline as AuditLog/EnrichmentRun.
+model DataProviderCallLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  provider       DataProvider
+  // The domain or email address queried — never a person's full record, to
+  // keep this log lightweight and avoid duplicating PII outside Contact/
+  // Company themselves.
+  target         String
+  succeeded      Boolean
+  // Real cost/result reason for a human reviewing the waterfall (found,
+  // NOT_FOUND, quota exhausted, provider not configured, real HTTP error) —
+  // never a guess about why.
+  resultSummary  String?
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([provider, createdAt])
+  @@index([organizationId, provider, createdAt])
+}
+
+enum DataProvider {
+  HUNTER_IO
+  ABSTRACT_EMAIL_VALIDATION
+  PROSPEO
+  OPENCORPORATES
+  UK_COMPANIES_HOUSE
+  WAPPALYZER
+  COMPANY_WEBSITE_SCRAPE
+  FMP
+  SEC_EDGAR
 }
 
 // Phase 1 AI Business Development System — the evidentiary backbone behind
@@ -5240,6 +5947,14 @@ model Contact {
   id                String        @id @default(cuid())
   organizationId    String
   companyId         String?
+  // Set only by findOrCreateContact (dedup.ts) when a returning contact's
+  // companyId is reassigned to a genuinely different real company — a
+  // detected job change, never a guess. Null for a contact that has never
+  // changed companies since being discovered. Feeds intent-scoring.ts's
+  // "Job change" signal (a recent hire is more likely to re-evaluate
+  // vendors) — never touched by a manual edit, only by this one automated
+  // detection path.
+  companyChangedAt  DateTime?
   firstName         String
   lastName          String?
   email             String
@@ -5309,21 +6024,22 @@ model Contact {
   owner         User?          @relation("ContactOwner", fields: [ownerUserId], references: [id], onDelete: SetNull)
   decisionMaker DecisionMaker? @relation(fields: [decisionMakerId], references: [id], onDelete: SetNull)
 
-  campaigns                CampaignContact[]
-  emailDrafts              EmailDraft[]
-  replies                  Reply[]
-  outreachMeetings         OutreachMeeting[]
-  tasks                    Task[]
-  deals                    Deal[]
-  reminders                Reminder[]
-  quotations               Quotation[]
-  rateNegotiations         RateNegotiation[]
-  conversationIntelligence ConversationIntelligence[]
-  revenueAttributions      RevenueAttribution[]
-  whatsappConversations    WhatsAppConversation[]
-  calls                    Call[]
-  voiceConsent             VoiceConsent?
-  evidence                 ContactEvidence[]
+  campaigns                 CampaignContact[]
+  emailDrafts               EmailDraft[]
+  replies                   Reply[]
+  outreachMeetings          OutreachMeeting[]
+  tasks                     Task[]
+  deals                     Deal[]
+  reminders                 Reminder[]
+  quotations                Quotation[]
+  rateNegotiations          RateNegotiation[]
+  conversationIntelligence  ConversationIntelligence[]
+  revenueAttributions       RevenueAttribution[]
+  whatsappConversations     WhatsAppConversation[]
+  calls                     Call[]
+  voiceConsent              VoiceConsent?
+  evidence                  ContactEvidence[]
+  marketingLandingPageLeads MarketingLandingPageLead[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -5338,16 +6054,16 @@ model Contact {
 // exactly (Phase 24), same immutable/append-only discipline, same
 // fieldName/verificationStatus/source/confidence shape.
 model ContactEvidence {
-  id                 String                      @id @default(cuid())
+  id                 String                     @id @default(cuid())
   contactId          String
   kind               EvidenceKind
-  fact               String                      @db.Text
+  fact               String                     @db.Text
   source             EvidenceSource
   sourceUrl          String?
   confidence         Float
-  discoveredAt       DateTime                    @default(now())
+  discoveredAt       DateTime                   @default(now())
   fieldName          String?
-  verificationStatus EvidenceVerificationStatus  @default(UNVERIFIED)
+  verificationStatus EvidenceVerificationStatus @default(UNVERIFIED)
 
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
 
@@ -6316,6 +7032,16 @@ model OutreachMeeting {
   scheduledAt      DateTime?
   icsGenerated     Boolean               @default(false)
   notes            String?               @db.Text
+
+  // Real Google Calendar sync (src/lib/integrations/calendar/
+  // google-calendar-events.ts) — same pattern as CareerInterview's
+  // calendarProvider/calendarEventId/calendarSyncStatus. Set once a
+  // confirmed meeting is actually written to the org's connected
+  // GOOGLE_CALENDAR; stays default NOT_CONNECTED (never fabricated) when no
+  // calendar integration is connected.
+  calendarProvider   String?
+  calendarEventId    String?
+  calendarSyncStatus String  @default("NOT_CONNECTED")
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   contact      Contact      @relation(fields: [contactId], references: [id], onDelete: Cascade)
@@ -7693,19 +8419,19 @@ enum WebhookEventType {
 // (src/app/api/webhooks/*/route.ts), which stay exactly as they are; those
 // are fixed integrations, this is a user-defined endpoint per Workflow.
 model Webhook {
-  id              String           @id @default(cuid())
+  id              String             @id @default(cuid())
   organizationId  String
   workflowId      String?
   direction       WebhookDirection
   // For INCOMING: the unique slug this org's endpoint is reachable at
   // (/api/webhooks/custom/[slug]). For OUTGOING: the real target URL this
   // Workflow's WEBHOOK node posts to.
-  slug            String?          @unique
+  slug            String?            @unique
   targetUrl       String?
   // AES-256-GCM encrypted HMAC signing secret (incoming: verifies the
   // sender; outgoing: signs our own payload so the receiver can verify us).
-  encryptedSecret String?          @db.Text
-  active          Boolean          @default(true)
+  encryptedSecret String?            @db.Text
+  active          Boolean            @default(true)
   lastTriggeredAt DateTime?
   // Phase 33: when non-empty, this row is ALSO (or exclusively, if
   // workflowId is null) a platform event-bus subscription — delivered by
@@ -10011,24 +10737,24 @@ model CareerCV {
   id              String @id @default(cuid())
   careerProfileId String
 
-  title    String
+  title       String
   // Real, verified-renderable language code — see CV_LANGUAGES in
   // src/lib/validations/career-cv.ts. Never a bare "any language" claim:
   // only languages this app's embedded font can actually shape correctly
   // are accepted (see cv-pdf-renderer.ts's real glyph-coverage check).
-  language     String
-  templateKey  CareerCVTemplate @default(CLASSIC)
+  language    String
+  templateKey CareerCVTemplate @default(CLASSIC)
   // CVContent (src/lib/validations/career-cv.ts) — personal info, summary,
   // experience, education, skills, certifications, languagesSpoken,
   // projects. Independent of CareerProfile's own fields — editing a CV here
   // never writes back to the profile.
-  content      Json
+  content     Json
 
   // Set once generatePdf() actually renders a real file to storage; null
   // means "content saved, no PDF generated yet" (a real, distinct state,
   // never a stale/guessed download).
-  storageKey   String?
-  generatedAt  DateTime?
+  storageKey  String?
+  generatedAt DateTime?
 
   // Set only when this CV was created via a real AI translation of another
   // CareerCV (§ translateCV) — never set for a from-scratch/manually-edited

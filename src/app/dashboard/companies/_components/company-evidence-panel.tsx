@@ -17,6 +17,13 @@ const SOURCE_LABEL: Record<EvidenceSource, string> = {
   MANUAL: "Manual entry",
   CSV_IMPORT: "CSV import",
   COMPANY_INTELLIGENCE: "Company intelligence",
+  OPENCORPORATES: "Company registry (OpenCorporates)",
+  UK_COMPANIES_HOUSE: "UK Companies House",
+  WAPPALYZER: "Technology detection (Wappalyzer)",
+  COMPANY_WEBSITE: "Company website",
+  FMP: "Employee count (Financial Modeling Prep)",
+  SEC_EDGAR: "SEC EDGAR filing",
+  PROSPEO: "Person lookup (Prospeo)",
 };
 
 export type EvidenceFreshness = "FRESH" | "AGING" | "STALE";

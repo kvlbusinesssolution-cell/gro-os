@@ -77,6 +77,8 @@ interface PlanTierSeed {
   userLimit: number | null;
   workspaceLimit: number | null;
   aiCreditsMonthly: number | null;
+  /** Monthly Growth Token allotment (src/lib/billing/growth-tokens.ts) — same nullable-means-unlimited convention as aiCreditsMonthly, distinct pool gating the Business Listings feature. */
+  growthTokensMonthly: number | null;
   storageMbLimit: number | null;
   projectLimit: number | null;
   clientLimit: number | null;
@@ -144,6 +146,7 @@ const PLAN_TIERS: PlanTierSeed[] = [
     userLimit: 3,
     workspaceLimit: 1,
     aiCreditsMonthly: 500,
+    growthTokensMonthly: 100,
     storageMbLimit: 500,
     projectLimit: 3,
     clientLimit: 10,
@@ -172,6 +175,7 @@ const PLAN_TIERS: PlanTierSeed[] = [
     userLimit: 10,
     workspaceLimit: 1,
     aiCreditsMonthly: 2000,
+    growthTokensMonthly: 500,
     storageMbLimit: 5 * GB,
     projectLimit: 15,
     clientLimit: 100,
@@ -200,6 +204,7 @@ const PLAN_TIERS: PlanTierSeed[] = [
     userLimit: 25,
     workspaceLimit: 3,
     aiCreditsMonthly: 8000,
+    growthTokensMonthly: 1500,
     storageMbLimit: 25 * GB,
     projectLimit: 50,
     clientLimit: 500,
@@ -228,6 +233,7 @@ const PLAN_TIERS: PlanTierSeed[] = [
     userLimit: 100,
     workspaceLimit: 10,
     aiCreditsMonthly: 30000,
+    growthTokensMonthly: 4000,
     storageMbLimit: 100 * GB,
     projectLimit: null,
     clientLimit: null,
@@ -256,6 +262,7 @@ const PLAN_TIERS: PlanTierSeed[] = [
     userLimit: null,
     workspaceLimit: null,
     aiCreditsMonthly: 150000,
+    growthTokensMonthly: null,
     storageMbLimit: 1 * TB,
     projectLimit: null,
     clientLimit: null,
@@ -285,6 +292,7 @@ const PLAN_TIERS: PlanTierSeed[] = [
     userLimit: null,
     workspaceLimit: null,
     aiCreditsMonthly: null,
+    growthTokensMonthly: null,
     storageMbLimit: null,
     projectLimit: null,
     clientLimit: null,
@@ -316,6 +324,7 @@ export interface PlanCatalogEntry {
   userLimit: number | null;
   workspaceLimit: number | null;
   aiCreditsMonthly: number | null;
+  growthTokensMonthly: number | null;
   storageMbLimit: number | null;
   projectLimit: number | null;
   clientLimit: number | null;
@@ -346,6 +355,7 @@ function toEntry(tierSeed: PlanTierSeed, interval: BillingIntervalUnit, currency
     userLimit: tierSeed.userLimit,
     workspaceLimit: tierSeed.workspaceLimit,
     aiCreditsMonthly: tierSeed.aiCreditsMonthly,
+    growthTokensMonthly: tierSeed.growthTokensMonthly,
     storageMbLimit: tierSeed.storageMbLimit,
     projectLimit: tierSeed.projectLimit,
     clientLimit: tierSeed.clientLimit,
@@ -396,6 +406,7 @@ export async function ensurePlansSeeded(): Promise<void> {
         userLimit: entry.userLimit,
         workspaceLimit: entry.workspaceLimit,
         aiCreditsMonthly: entry.aiCreditsMonthly,
+        growthTokensMonthly: entry.growthTokensMonthly,
         storageMbLimit: entry.storageMbLimit,
         projectLimit: entry.projectLimit,
         clientLimit: entry.clientLimit,
@@ -424,6 +435,7 @@ export async function ensurePlansSeeded(): Promise<void> {
         userLimit: entry.userLimit,
         workspaceLimit: entry.workspaceLimit,
         aiCreditsMonthly: entry.aiCreditsMonthly,
+        growthTokensMonthly: entry.growthTokensMonthly,
         storageMbLimit: entry.storageMbLimit,
         projectLimit: entry.projectLimit,
         clientLimit: entry.clientLimit,

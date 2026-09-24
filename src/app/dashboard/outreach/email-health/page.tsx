@@ -102,6 +102,9 @@ export default async function EmailHealthPage() {
                     <span>
                       DMARC: <Badge variant={DOMAIN_STATUS_VARIANT[d.dmarc.status]}>{d.dmarc.status}</Badge>
                     </span>
+                    <span title={d.blacklist.detail}>
+                      Blacklist: <Badge variant={DOMAIN_STATUS_VARIANT[d.blacklist.status]}>{d.blacklist.status}</Badge>
+                    </span>
                   </CardContent>
                 </Card>
               ))}

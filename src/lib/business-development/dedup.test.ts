@@ -337,6 +337,32 @@ describe("findOrCreateContact", () => {
     expect(second.wasCreated).toBe(false);
     expect(second.contact.id).toBe(first.contact.id);
     expect(second.contact.companyId).toBe(companyB.id);
+    expect(second.contact.companyChangedAt).not.toBeNull();
+  });
+
+  it("job change: does not set companyChangedAt when a contact's companyId is merely being filled in for the first time", async () => {
+    const company = await prisma.company.create({
+      data: { organizationId, name: "First Real Employer Co", source: "MANUAL", status: "LEAD" },
+    });
+
+    const first = await findOrCreateContact({
+      organizationId,
+      firstName: "No",
+      lastName: "PriorCompany",
+      email: "no.prior.company@example.com",
+    });
+    expect(first.contact.companyId).toBeNull();
+
+    const second = await findOrCreateContact({
+      organizationId,
+      companyId: company.id,
+      firstName: "No",
+      lastName: "PriorCompany",
+      email: "no.prior.company@example.com",
+    });
+
+    expect(second.contact.companyId).toBe(company.id);
+    expect(second.contact.companyChangedAt).toBeNull();
   });
 
   it("same person at multiple companies stays as independent rows when emails genuinely differ", async () => {

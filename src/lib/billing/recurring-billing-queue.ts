@@ -25,7 +25,7 @@ import { uninstallListing } from "@/lib/marketplace/install-engine";
 
 const QUEUE_NAME = "kvl-billing-recurring";
 
-type RecurringBillingJobName = "renewal-sweep" | "trial-reminder" | "dunning" | "credit-reset" | "marketplace-subscription-renewal-sweep";
+type RecurringBillingJobName = "renewal-sweep" | "trial-reminder" | "dunning" | "credit-reset" | "growth-token-reset" | "marketplace-subscription-renewal-sweep";
 
 interface RecurringBillingJobData {
   job: RecurringBillingJobName;
@@ -244,6 +244,30 @@ async function runCreditReset(): Promise<void> {
   }
 }
 
+/** Real monthly Growth Token reset — mirrors runCreditReset above exactly, for GrowthTokenLedger instead of AICreditLedger: for every ledger whose periodResetAt has passed, resets monthlyTokensUsed to 0, advances periodResetAt by one real calendar month, and re-syncs monthlyTokensGranted from the org's CURRENT Plan. Never touches purchasedTokensRemaining — bought tokens don't expire on a monthly cycle. Without this job, an org that exhausted its monthly Growth Token allowance stayed blocked every month after, with no way back short of buying purchased tokens — opportunistic reads (getGrowthTokenAvailability/spendGrowthTokens) also self-heal via resetLedgerIfDue, but this sweep covers orgs that go quiet without triggering either. */
+async function runGrowthTokenReset(): Promise<void> {
+  const now = new Date();
+  const ledgers = await prisma.growthTokenLedger.findMany({
+    where: { periodResetAt: { lte: now } },
+    include: { billingAccount: { include: { currentPlan: true } } },
+  });
+
+  for (const ledger of ledgers) {
+    try {
+      const granted = ledger.billingAccount.currentPlan?.growthTokensMonthly ?? 0;
+      const nextReset = new Date(now);
+      nextReset.setMonth(nextReset.getMonth() + 1);
+
+      await prisma.growthTokenLedger.update({
+        where: { id: ledger.id },
+        data: { monthlyTokensUsed: 0, monthlyTokensGranted: granted, periodResetAt: nextReset },
+      });
+    } catch (error) {
+      console.error(`[billing/recurring-queue] growth token reset failed for GrowthTokenLedger ${ledger.id}:`, error);
+    }
+  }
+}
+
 async function processRecurringBillingJob(bullJob: BullJob<RecurringBillingJobData>): Promise<void> {
   switch (bullJob.data.job) {
     case "renewal-sweep":
@@ -254,6 +278,8 @@ async function processRecurringBillingJob(bullJob: BullJob<RecurringBillingJobDa
       return runDunning();
     case "credit-reset":
       return runCreditReset();
+    case "growth-token-reset":
+      return runGrowthTokenReset();
     case "marketplace-subscription-renewal-sweep":
       return runMarketplaceSubscriptionRenewalSweep();
   }
@@ -273,6 +299,7 @@ function ensureWorker(): void {
 const JOB_SCHEDULES: Array<{ job: RecurringBillingJobName; cronExpression: string }> = [
   { job: "renewal-sweep", cronExpression: "0 2 * * *" }, // daily 02:00 — after most gateways' own renewal cycles have already fired for the day
   { job: "credit-reset", cronExpression: "0 1 * * *" }, // daily 01:00 — cheap to check daily even though each org's own period only actually resets monthly
+  { job: "growth-token-reset", cronExpression: "5 1 * * *" }, // daily 01:05 — same cadence as credit-reset, offset 5 min to avoid contending for the same connection slot
   { job: "trial-reminder", cronExpression: "0 9 * * *" }, // daily 09:00 — a reasonable local-morning-ish send time
   { job: "dunning", cronExpression: "0 10 * * *" }, // daily 10:00
   { job: "marketplace-subscription-renewal-sweep", cronExpression: "30 2 * * *" }, // daily 02:30 — right after the platform renewal-sweep
@@ -283,7 +310,7 @@ const JOB_SCHEDULES: Array<{ job: RecurringBillingJobName; cronExpression: strin
  * dev); BullMQ's upsertJobScheduler updates an existing scheduler rather
  * than creating a duplicate one for the same jobSchedulerId (same real
  * behavior src/lib/scheduler/providers/bullmq-provider.ts already relies on).
- * Call this once from the app's real process bootstrap to activate the 4
+ * Call this once from the app's real process bootstrap to activate the 6
  * recurring jobs — not wired in automatically by this file (see the
  * top-of-file comment).
  */

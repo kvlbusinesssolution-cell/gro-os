@@ -1,20 +1,22 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Container } from "@/components/ui/container";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { DURATIONS, EASES } from "@/animations";
-import type { Organization } from "@/generated/prisma/client";
+import type { Organization, OrganizationType } from "@/generated/prisma/client";
 import type {
   BusinessDetailsInput,
   CompanyProfileInput,
   ServicesGoalsInput,
 } from "@/lib/validations/onboarding";
-import { updateBusinessDetails, updateCompanyProfile, updateServicesGoals } from "../actions";
+import { chooseAccountType, updateBusinessDetails, updateCompanyProfile, updateServicesGoals } from "../actions";
 import { OnboardingProgressBar, WIZARD_STEPS } from "./progress-bar";
+import { StepAccountType } from "./step-account-type";
 import { StepBusinessDetails } from "./step-business-details";
 import { StepCompanyProfile } from "./step-company-profile";
 import { StepServicesGoals } from "./step-services-goals";
@@ -64,9 +66,20 @@ function toServicesGoalsForm(org: Organization): ServicesGoalsInput {
 }
 
 export function OnboardingWizard({ organization: initialOrganization }: { organization: Organization }) {
+  const router = useRouter();
   const [organization, setOrganization] = useState(initialOrganization);
   const [currentStep, setCurrentStep] = useState(() => Math.min(organization.onboardingStep + 1, 3));
   const [showSuccess, setShowSuccess] = useState(organization.onboardingStep >= 3);
+
+  async function handleChooseAccountType(type: OrganizationType) {
+    const result = await chooseAccountType(organization.id, type);
+    if (!result.ok || !result.organization) return;
+    if (type === "CAREER") {
+      router.push("/dashboard/career");
+      return;
+    }
+    setOrganization(result.organization);
+  }
 
   async function handleSaveCompanyProfile(data: CompanyProfileInput) {
     const result = await updateCompanyProfile(organization.id, data);
@@ -93,6 +106,24 @@ export function OnboardingWizard({ organization: initialOrganization }: { organi
       setShowSuccess(true);
     }
     return { ok: result.ok, error: result.error };
+  }
+
+  if (!organization.accountTypeConfirmed) {
+    return (
+      <main className="flex min-h-svh items-center justify-center bg-background px-6 py-16">
+        <Container className="max-w-2xl">
+          <div className="flex flex-col gap-8">
+            <SectionHeading
+              align="left"
+              eyebrow="Welcome"
+              title="What brings you here?"
+              description="This decides your workspace — you can't switch it later without creating a new account."
+            />
+            <StepAccountType onChoose={handleChooseAccountType} />
+          </div>
+        </Container>
+      </main>
+    );
   }
 
   if (showSuccess) {

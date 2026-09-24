@@ -64,6 +64,7 @@ const PRODUCT_LINKS = [
 ] as const;
 
 const NAV_LINKS = [
+  { label: "Business Directory", href: "/listings" },
   { label: "Developers", href: "/developers" },
   { label: "Trust Center", href: "/trust" },
   { label: "FAQ", href: "/product#faq" },

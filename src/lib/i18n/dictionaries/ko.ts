@@ -21,6 +21,8 @@ export const ko: Dictionary = {
   "nav.growthEngine": "성장 엔진",
   "nav.websiteScanner": "웹사이트 스캐너",
   "nav.outreach": "아웃리치",
+  "nav.marketing": "마케팅",
+  "nav.businessGrowth": "비즈니스 성장",
   "nav.crm": "CRM",
   "nav.projects": "프로젝트",
   "nav.delivery": "딜리버리",

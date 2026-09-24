@@ -102,6 +102,7 @@ function buildProfileData(parsed: z.output<typeof companySchema>) {
     growthRate: parsed.growthRate ?? null,
     fundingStage: parsed.fundingStage || null,
     fundingAmount: parsed.fundingAmount ?? null,
+    fundingDate: parsed.fundingDate ?? null,
     language: parsed.language || null,
   };
 }

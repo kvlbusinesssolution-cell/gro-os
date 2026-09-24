@@ -17,6 +17,7 @@ import { GenerateDraftPanel } from "./_components/generate-draft-panel";
 import { FollowUpPanel } from "./_components/follow-up-panel";
 import { LogReplyForm } from "./_components/log-reply-form";
 import { RequestMeetingForm } from "./_components/request-meeting-form";
+import { MeetingActionsPanel } from "./_components/meeting-actions-panel";
 import { SuggestedReplyButton } from "./_components/suggested-reply-button";
 import { checkWhatsAppEligibility } from "@/lib/outreach/whatsapp-eligibility";
 
@@ -149,6 +150,7 @@ export default async function ContactDetailPage({ params }: { params: Promise<{ 
                           Download .ics calendar invite
                         </a>
                       )}
+                      <MeetingActionsPanel meetingId={meeting.id} status={meeting.status} scheduledAt={meeting.scheduledAt} />
                     </CardContent>
                   </Card>
                 ))}

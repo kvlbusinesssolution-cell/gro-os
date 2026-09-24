@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
 import type { Prisma, IntegrationProviderKey } from "@/generated/prisma/client";
 import { validateManifest, type Manifest } from "./manifest-schema";
 import { installAgentPack, uninstallAgentPack } from "./installers/agent-pack";
@@ -209,6 +210,13 @@ export async function installListing(params: InstallListingParams): Promise<{ in
     await prisma.marketplaceListing.update({ where: { id: params.listingId }, data: { installCount: { increment: 1 } } });
   }
 
+  await logAudit({
+    userId: params.installedByUserId,
+    organizationId: params.organizationId,
+    action: existing ? "marketplace.listing.upgraded" : "marketplace.listing.installed",
+    metadata: { listingId: params.listingId, versionId, installId: install.id },
+  });
+
   return { installId: install.id };
 }
 
@@ -236,6 +244,13 @@ export async function uninstallListing(params: UninstallListingParams): Promise<
     data: { status: "UNINSTALLED", uninstalledAt: new Date(), uninstalledByUserId: params.uninstalledByUserId },
   });
   await prisma.marketplaceInstallEvent.create({ data: { installId: install.id, eventType: "UNINSTALLED" } });
+
+  await logAudit({
+    userId: params.uninstalledByUserId,
+    organizationId: params.organizationId,
+    action: "marketplace.listing.uninstalled",
+    metadata: { listingId: params.listingId, installId: install.id },
+  });
 }
 
 export interface RollbackInstallParams {

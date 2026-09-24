@@ -5,6 +5,7 @@ import { logAudit } from "@/lib/audit";
 import type { CareerInterviewStatus } from "@/generated/prisma/client";
 import { checkInterviewConflict, type AvailabilityCheckInput } from "./interview-availability";
 import { buildInterviewAcceptanceDraft, buildAlternativeTimeDraft, queueRecruiterDraft } from "./recruiter-reply-drafts";
+import { createGoogleCalendarEvent } from "@/lib/integrations/calendar/google-calendar-events";
 
 /**
  * Phase 21 (§20, §21, §22, §26, §27, §53) — real interview creation +
@@ -70,6 +71,7 @@ export async function createOrUpdateInterviewFromCommunication(input: CreateInte
     const profile = await prisma.careerProfile.findUnique({ where: { id: input.careerProfileId } });
     if (profile) {
       const availabilityInput: AvailabilityCheckInput = {
+        organizationId: input.organizationId,
         careerProfileId: input.careerProfileId,
         proposedStartUtc: input.scheduledAtUtc,
         durationMinutes: input.durationMinutes ?? 60,
@@ -120,7 +122,7 @@ export interface DecideInterviewResult {
 
 /** §22/§23/§24/§25 — the real, human-driven decision on a pending interview request. */
 export async function decideInterview(interviewId: string, userId: string, decision: InterviewDecision): Promise<DecideInterviewResult> {
-  const interview = await prisma.careerInterview.findUnique({ where: { id: interviewId } });
+  const interview = await prisma.careerInterview.findUnique({ where: { id: interviewId }, include: { application: { include: { job: true } } } });
   if (!interview) return { ok: false, error: "Interview not found." };
   if (interview.status !== "PENDING_APPROVAL" && interview.status !== "REQUESTED") {
     return { ok: false, error: `Cannot decide an interview in status ${interview.status}.` };
@@ -131,9 +133,40 @@ export async function decideInterview(interviewId: string, userId: string, decis
   if (decision === "REJECT") newStatus = "CANCELLED";
   if (decision === "SUGGEST_ALTERNATIVE" || decision === "REQUEST_ANOTHER_SLOT") newStatus = "RESCHEDULE_REQUESTED";
 
+  // Real Google Calendar sync — only when ACCEPT genuinely confirms a real
+  // scheduled time, and only when the org has a connected GOOGLE_CALENDAR
+  // integration (createGoogleCalendarEvent returns null otherwise, and
+  // calendarSyncStatus honestly stays its default NOT_CONNECTED). Never
+  // blocks the decision itself — a calendar-sync failure must not prevent
+  // the real, human-driven ACCEPT from being recorded.
+  let calendarEventId: string | null = null;
+  let calendarSyncStatus: string | undefined;
+  if (decision === "ACCEPT" && interview.scheduledAtUtc) {
+    const endUtc = new Date(interview.scheduledAtUtc.getTime() + (interview.durationMinutes ?? 60) * 60_000);
+    const created = await createGoogleCalendarEvent(interview.organizationId, {
+      summary: `Interview — ${interview.application.job.title} at ${interview.application.job.company}`,
+      description: [interview.interviewerName && `Interviewer: ${interview.interviewerName}`, interview.notes].filter(Boolean).join("\n") || undefined,
+      location: interview.meetingLink ?? interview.phone ?? undefined,
+      startUtc: interview.scheduledAtUtc,
+      endUtc,
+    });
+    if (created) {
+      calendarEventId = created.eventId;
+      calendarSyncStatus = "SYNCED";
+    } else {
+      calendarSyncStatus = "NOT_CONNECTED";
+    }
+  }
+
   await prisma.careerInterview.update({
     where: { id: interviewId },
-    data: { status: newStatus, decision, decisionByUserId: userId, decisionAt: new Date() },
+    data: {
+      status: newStatus,
+      decision,
+      decisionByUserId: userId,
+      decisionAt: new Date(),
+      ...(calendarEventId ? { calendarProvider: "GOOGLE_CALENDAR", calendarEventId, calendarSyncStatus } : {}),
+    },
   });
 
   // §22/§24/§25 — a real human decision now genuinely authorizes preparing
@@ -149,6 +182,6 @@ export async function decideInterview(interviewId: string, userId: string, decis
     if (content) draftId = (await queueRecruiterDraft({ kind: "interview", id: interviewId }, content))?.id ?? null;
   }
 
-  await logAudit({ organizationId: interview.organizationId, userId, action: "career:interview:decided", metadata: { interviewId, decision, newStatus, draftId } });
+  await logAudit({ organizationId: interview.organizationId, userId, action: "career:interview:decided", metadata: { interviewId, decision, newStatus, draftId, calendarSyncStatus } });
   return { ok: true };
 }

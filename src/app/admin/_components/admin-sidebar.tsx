@@ -19,6 +19,8 @@ import {
   Inbox,
   LineChart,
   Mail,
+  BadgeCheck,
+  Coins,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -73,6 +75,7 @@ const GROUPS: AdminLinkGroup[] = [
     links: [
       { href: "/admin/billing", label: "Billing", icon: CreditCard, exact: true },
       { href: "/admin/payouts", label: "Payouts", icon: Landmark, exact: true },
+      { href: "/admin/growth-tokens", label: "Growth Tokens", icon: Coins, exact: true },
     ],
   },
   {
@@ -96,6 +99,10 @@ const GROUPS: AdminLinkGroup[] = [
       { href: "/admin/marketplace/reviews", label: "Reviews", icon: ShieldCheck, exact: true },
       { href: "/admin/marketplace/orders", label: "Orders", icon: CreditCard, exact: true },
     ],
+  },
+  {
+    label: "Business Growth",
+    links: [{ href: "/admin/business-listings", label: "Listings & Trust", icon: BadgeCheck, exact: true }],
   },
 ];
 

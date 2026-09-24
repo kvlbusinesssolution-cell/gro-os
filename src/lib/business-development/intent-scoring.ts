@@ -36,7 +36,27 @@ export interface IntentSignal {
     | "emailEngagement"
     | "replyEngagement"
     | "meetingActivity"
-    | "proposalActivity";
+    | "proposalActivity"
+    // Real, free, zero-new-API-cost signals reused from OTHER modules of
+    // this same platform (never a new paid data source):
+    // "hiringActivity" cross-references the Career section's real Remotive
+    // Job table by company domain — a company actively posting open roles
+    // is a genuine growth/budget signal. "technologyChange" diffs the
+    // Technology rows between a company's two most recent Website Scanner
+    // scans — a newly-adopted tool (payments, chat, analytics, etc.) is a
+    // real, measured sign of digital investment, not a guess.
+    | "hiringActivity"
+    | "technologyChange"
+    // 2026-09 addition: two more real, free, zero-new-API-cost signals.
+    // "funding" reads Company.fundingStage/fundingAmount/fundingDate — real
+    // fields, filled manually or via the SEC EDGAR finder
+    // (src/lib/enrichment/company-funding-finder.ts) — a funded company
+    // genuinely has fresh budget. "jobChange" reads Contact.companyChangedAt
+    // (set only by findOrCreateContact's real job-change detection,
+    // dedup.ts) — a contact who recently joined this company is more likely
+    // to be actively re-evaluating vendors in their first months.
+    | "funding"
+    | "jobChange";
   detail: string;
   points: number;
 }
@@ -126,6 +146,31 @@ const PROPOSAL_SENT_POINTS = 15;
 const PROPOSAL_ACCEPTED_POINTS = 25;
 const PROPOSAL_SIGNAL_CAP = 30;
 
+// ===== Advanced signals (2026-09): real cross-module + measured-change =====
+// signals, added without any new external API dependency — both reuse data
+// this platform already collects for a different purpose.
+const HIRING_JOB_POINTS = 9;
+const HIRING_JOB_SIGNAL_CAP = 27; // max 3 open roles counted
+// A job posting is only current evidence while it's genuinely active —
+// treated as "hiring now", not decayed like the hand-tuned engagement
+// signals above (a closed/expired Job simply never matches the query).
+const HIRING_ACTIVE_STATUSES = ["DISCOVERED", "MATCHED", "SHORTLISTED", "REVIEW_REQUIRED"] as const;
+
+const TECH_CHANGE_POINTS = 10;
+const TECH_CHANGE_CAP = 20; // max 2 newly-adopted technologies counted
+
+// A real funding round means fresh budget — one of the strongest single
+// facts available, so weighted higher than any individual AI-research
+// signal above, but still a single flat award (a company either has a real
+// funding fact on file or it doesn't — there's no "count" to cap).
+const FUNDING_SIGNAL_POINTS = 15;
+// A real, detected job change (dedup.ts) means a new hire, statistically
+// likely to re-evaluate existing vendor relationships in their first few
+// months — weighted per contact, capped so several contacts changing jobs
+// around the same time (e.g. a bulk CSV re-import) doesn't dominate.
+const JOB_CHANGE_POINTS = 12;
+const JOB_CHANGE_CAP = 24; // max 2 contacts counted
+
 /**
  * Per-signal-type freshness/decay — distinct from the flat
  * RECENCY_BONUS above (which stays untouched, applying only to the
@@ -148,6 +193,12 @@ const REPLY_DECAY: DecayProfile = { fullWeightDays: 7, floorDays: 30, floorMulti
 const EMAIL_ENGAGEMENT_DECAY: DecayProfile = { fullWeightDays: 7, floorDays: 21, floorMultiplier: 0.15 };
 const MEETING_DECAY: DecayProfile = { fullWeightDays: 14, floorDays: 45, floorMultiplier: 0.3 };
 const PROPOSAL_DECAY: DecayProfile = { fullWeightDays: 30, floorDays: 90, floorMultiplier: 0.4 };
+// Funding stays a relevant budget signal for roughly a year post-raise,
+// tapering slowly — much longer-lived than any engagement signal above.
+const FUNDING_DECAY: DecayProfile = { fullWeightDays: 90, floorDays: 365, floorMultiplier: 0.3 };
+// A new hire's "fresh eyes on vendors" window is real but short — full
+// weight for the first month, tapering out by ~4 months.
+const JOB_CHANGE_DECAY: DecayProfile = { fullWeightDays: 30, floorDays: 120, floorMultiplier: 0.2 };
 
 function decayMultiplier(ageDays: number, profile: DecayProfile): number {
   if (ageDays <= profile.fullWeightDays) return 1;
@@ -181,7 +232,10 @@ function isDaysAgo(date: Date, days: number): boolean {
 }
 
 export async function computeIntentScore(companyId: string): Promise<IntentScoreComputation | null> {
-  const company = await prisma.company.findUnique({ where: { id: companyId }, select: { id: true } });
+  const company = await prisma.company.findUnique({
+    where: { id: companyId },
+    select: { id: true, domain: true, fundingStage: true, fundingAmount: true, fundingDate: true },
+  });
   if (!company) return null;
 
   const latestIntel = await prisma.companyIntelligence.findFirst({
@@ -232,7 +286,7 @@ export async function computeIntentScore(companyId: string): Promise<IntentScore
   }
 
   // ===== Phase 2: real CRM/outreach engagement signals =====
-  const contacts = await prisma.contact.findMany({ where: { companyId }, select: { id: true } });
+  const contacts = await prisma.contact.findMany({ where: { companyId }, select: { id: true, companyChangedAt: true } });
   const contactIds = contacts.map((c) => c.id);
 
   const [replies, emailDrafts, meetings, proposals] = await Promise.all([
@@ -291,6 +345,78 @@ export async function computeIntentScore(companyId: string): Promise<IntentScore
     if (points <= 0) continue;
     proposalPoints += points;
     signals.push({ signal: "Proposal activity", source: "proposalActivity", detail: `Proposal "${p.title}" is ${p.status}`, points });
+  }
+
+  // ===== Advanced signal: real hiring activity (Career section's Remotive =====
+  // Job table, cross-referenced by domain — zero new API cost, reuses data
+  // this platform already collects for job-seekers).
+  if (company.domain) {
+    const openJobs = await prisma.job.findMany({
+      where: { companyDomain: company.domain, status: { in: [...HIRING_ACTIVE_STATUSES] } },
+      orderBy: { lastSeenAt: "desc" },
+      take: 3,
+      select: { title: true },
+    });
+    let hiringPoints2 = 0;
+    for (const job of openJobs) {
+      if (hiringPoints2 >= HIRING_JOB_SIGNAL_CAP) break;
+      const points = Math.min(HIRING_JOB_POINTS, HIRING_JOB_SIGNAL_CAP - hiringPoints2);
+      hiringPoints2 += points;
+      signals.push({ signal: "Hiring activity", source: "hiringActivity", detail: `Actively hiring: "${job.title}" (open job posting)`, points });
+    }
+  }
+
+  // ===== Advanced signal: real technology change between the two most =====
+  // recent Website Scanner scans for this company — a newly-adopted tool is
+  // a measured fact (Technology rows are detected from real response
+  // headers/HTML signatures, see website-scanner), never an AI guess.
+  const recentScans = await prisma.websiteScan.findMany({
+    where: { companyId, status: "COMPLETED" },
+    orderBy: { createdAt: "desc" },
+    take: 2,
+    select: { id: true, technologies: { select: { name: true } } },
+  });
+  if (recentScans.length === 2) {
+    const [latestScan, priorScan] = recentScans;
+    const priorNames = new Set(priorScan.technologies.map((t) => t.name));
+    const newlyAdopted = latestScan.technologies.filter((t) => !priorNames.has(t.name));
+    let techPoints = 0;
+    for (const tech of newlyAdopted) {
+      if (techPoints >= TECH_CHANGE_CAP) break;
+      const points = Math.min(TECH_CHANGE_POINTS, TECH_CHANGE_CAP - techPoints);
+      techPoints += points;
+      signals.push({ signal: "Technology change", source: "technologyChange", detail: `Newly detected technology since the last scan: ${tech.name}`, points });
+    }
+  }
+
+  // ===== Advanced signal: real funding, from Company.fundingStage/Amount/ =====
+  // Date — a manually-entered fact or, since this session's SEC EDGAR
+  // finder, a real Form D filing (src/lib/enrichment/company-funding-finder.ts).
+  // Never derived/guessed here — this only reads what's already on file.
+  if (company.fundingStage) {
+    const multiplier = company.fundingDate ? decayMultiplier(ageInDays(company.fundingDate), FUNDING_DECAY) : 1;
+    const points = Math.round(FUNDING_SIGNAL_POINTS * multiplier);
+    if (points > 0) {
+      signals.push({
+        signal: "Funding",
+        source: "funding",
+        detail: `${company.fundingStage}${company.fundingAmount ? ` (${company.fundingAmount})` : ""}`,
+        points,
+      });
+    }
+  }
+
+  // ===== Advanced signal: real job change, from Contact.companyChangedAt =====
+  // — set only by findOrCreateContact's real job-change detection
+  // (dedup.ts), never a guess.
+  let jobChangePoints = 0;
+  for (const contact of contacts) {
+    if (jobChangePoints >= JOB_CHANGE_CAP) break;
+    if (!contact.companyChangedAt) continue;
+    const points = Math.round(Math.min(JOB_CHANGE_POINTS, JOB_CHANGE_CAP - jobChangePoints) * decayMultiplier(ageInDays(contact.companyChangedAt), JOB_CHANGE_DECAY));
+    if (points <= 0) continue;
+    jobChangePoints += points;
+    signals.push({ signal: "Job change", source: "jobChange", detail: "A known contact recently joined this company", points });
   }
 
   let subtotal = signals.reduce((sum, s) => sum + s.points, 0);

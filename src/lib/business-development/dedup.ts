@@ -47,16 +47,24 @@ export function normalizeWebsiteHost(website: string | null | undefined): string
  * exact string comparison would miss them. A genuinely different company
  * with a similar-sounding name must still not match.
  */
-const LEGAL_SUFFIX_RE =
-  /\b(inc|incorporated|llc|ltd|limited|pvt|private|co|corp|corporation|company|plc|llp|gmbh|sa|srl|bv)\b\.?/gi;
+// Anchored to the END of the string only (never matched mid-name or at the
+// start) — a plain \b-bounded match anywhere would misfire on a real,
+// distinguishing part of a brand name that happens to share a suffix token
+// ("Co-Diagnostics" and "Diagnostics Inc" both collapsed to "diagnostics"
+// before this fix, silently merging two unrelated companies). Applied in a
+// loop below so multi-word suffixes ("Pvt Ltd", "Pvt. Ltd.") strip fully.
+const TRAILING_LEGAL_SUFFIX_RE =
+  /[,.\s]*\b(inc|incorporated|llc|ltd|limited|pvt|private|co|corp|corporation|company|plc|llp|gmbh|sa|srl|bv)\.?\s*$/i;
 
 export function normalizeCompanyName(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(LEGAL_SUFFIX_RE, " ")
-    .replace(/[^\p{L}\p{N}]+/gu, " ")
-    .trim()
-    .replace(/\s+/g, " ");
+  let working = name.toLowerCase().trim();
+  let stripped = true;
+  while (stripped) {
+    const next = working.replace(TRAILING_LEGAL_SUFFIX_RE, "").trim();
+    stripped = next !== working;
+    working = next;
+  }
+  return working.replace(/[^\p{L}\p{N}]+/gu, " ").trim().replace(/\s+/g, " ");
 }
 
 export interface FindOrCreateCompanyInput {
@@ -290,21 +298,44 @@ export async function findOrCreateContact(input: FindOrCreateContactInput): Prom
   }
 
   if (existing) {
+    // Fill-when-empty only, for every descriptive field below — a rediscovery/
+    // enrichment pass has no way to know whether the current value came from
+    // a human's own manual correction in the CRM (updateContact, a separate
+    // direct-update path that never runs through this function) or from an
+    // earlier, possibly-stale automated pass; overwriting whenever a new
+    // value "merely differs" would silently clobber a human correction with
+    // no evidence trail explaining why. companyId is the one deliberate
+    // exception — a job change is a genuine real-world event worth always
+    // reflecting (Phase 25 fix, see doc comment above), not stale data risk
+    // in the same sense. Tags are additive-merged, never replaced, so an
+    // automated pass can still contribute new tags without erasing ones a
+    // human added.
     const updateData: Record<string, unknown> = {};
-    if (input.companyId && input.companyId !== existing.companyId) updateData.companyId = input.companyId;
-    if (input.firstName && input.firstName !== existing.firstName) updateData.firstName = input.firstName;
-    if (input.lastName && input.lastName !== existing.lastName) updateData.lastName = input.lastName;
-    if (input.jobTitle && input.jobTitle !== existing.jobTitle) updateData.jobTitle = input.jobTitle;
-    if (input.phone && input.phone !== existing.phone) updateData.phone = input.phone;
-    if (input.country && input.country !== existing.country) updateData.country = input.country;
-    if (input.city && input.city !== existing.city) updateData.city = input.city;
-    if (input.notes && input.notes !== existing.notes) updateData.notes = input.notes;
-    if (input.linkedin && input.linkedin !== existing.linkedin) updateData.linkedin = input.linkedin;
-    if (input.department && input.department !== existing.department) updateData.department = input.department;
-    if (input.relationshipScore != null && input.relationshipScore !== existing.relationshipScore) {
+    if (input.companyId && input.companyId !== existing.companyId) {
+      updateData.companyId = input.companyId;
+      // Only a real job change (an already-known company being replaced by
+      // a different one) sets the timestamp — a contact whose companyId was
+      // simply empty until now is being filled in for the first time, not
+      // moving jobs, so intent-scoring.ts's "Job change" signal must not
+      // fire for that case.
+      if (existing.companyId) updateData.companyChangedAt = new Date();
+    }
+    if (input.firstName && !existing.firstName) updateData.firstName = input.firstName;
+    if (input.lastName && !existing.lastName) updateData.lastName = input.lastName;
+    if (input.jobTitle && !existing.jobTitle) updateData.jobTitle = input.jobTitle;
+    if (input.phone && !existing.phone) updateData.phone = input.phone;
+    if (input.country && !existing.country) updateData.country = input.country;
+    if (input.city && !existing.city) updateData.city = input.city;
+    if (input.notes && !existing.notes) updateData.notes = input.notes;
+    if (input.linkedin && !existing.linkedin) updateData.linkedin = input.linkedin;
+    if (input.department && !existing.department) updateData.department = input.department;
+    if (input.relationshipScore != null && existing.relationshipScore == null) {
       updateData.relationshipScore = input.relationshipScore;
     }
-    if (input.tags && input.tags.length > 0 && input.tags.join() !== existing.tags.join()) updateData.tags = input.tags;
+    if (input.tags && input.tags.length > 0) {
+      const mergedTags = Array.from(new Set([...existing.tags, ...input.tags]));
+      if (mergedTags.length !== existing.tags.length) updateData.tags = mergedTags;
+    }
 
     const contact = Object.keys(updateData).length > 0
       ? await prisma.contact.update({ where: { id: existing.id }, data: updateData })

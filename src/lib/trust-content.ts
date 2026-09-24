@@ -253,6 +253,11 @@ export const SECURITY_BADGES: SecurityBadge[] = [
   { label: "Hash-Chained Audit Logs", description: "Every sensitive action is logged in a tamper-evident, cryptographically chained audit trail." },
   { label: "GDPR Data Controls", description: "Self-service data export and a real cookie-consent system with default-off analytics." },
   { label: "SSL/TLS Encrypted", description: "All production traffic is served over HTTPS." },
+  {
+    label: "ISO 27001 / SOC 2 Readiness Program",
+    description:
+      "A real, working compliance program — asset inventory, risk register, policy center, statement of applicability, vendor register, and change management — not a claimed certification.",
+  },
 ];
 
 // ---------- LIVE: Why Companies Choose KVL ----------
@@ -266,6 +271,8 @@ export const COMPARISON_ROWS: ComparisonRow[] = [
   { category: "Transparency", kvl: "You own your source code and infrastructure", typicalAgency: "Vendor lock-in is common" },
   { category: "Enterprise Readiness", kvl: "NDA, SLA, and formal support agreements available", typicalAgency: "Informal, ad-hoc engagement terms" },
   { category: "Maintenance", kvl: "Ongoing maintenance included per agreement", typicalAgency: "Support often ends at project handoff" },
+  { category: "End-to-End Coverage", kvl: "One system covers leads, proposals, delivery, and billing — plus a client portal", typicalAgency: "You stitch together separate CRM, project, and invoicing tools yourself" },
+  { category: "Revenue Reporting", kvl: "Attribution is traced to real paid invoices, not pipeline potential", typicalAgency: "Reports estimate value from deals that haven't actually been paid yet" },
 ];
 
 // ---------- Architecture-only: no real content yet ----------

@@ -257,4 +257,78 @@ describe("computeIntentScore", () => {
     expect(result!.score).toBeGreaterThan(0);
     expect(result!.score).toBeLessThan(40); // one aged-2-day INTERESTED reply alone stays well under HIGH/MEDIUM
   });
+
+  it("real funding signal: a company with a funded fundingStage on file gets a real Funding signal, full weight when the funding date is fresh", async () => {
+    const fundedCo = await prisma.company.create({
+      data: { organizationId, name: "Freshly Funded Co", fundingStage: "Series A", fundingAmount: 5_000_000, fundingDate: new Date() },
+    });
+
+    const result = await computeIntentScore(fundedCo.id);
+    const signal = result?.signals.find((s) => s.source === "funding");
+
+    expect(signal).toBeDefined();
+    expect(signal?.points).toBe(15); // FUNDING_SIGNAL_POINTS, full weight — fundingDate is today
+    expect(signal?.detail).toContain("Series A");
+  });
+
+  it("real funding signal: decays for an old funding date, but never to zero", async () => {
+    const oldFundedCo = await prisma.company.create({
+      data: { organizationId, name: "Old Funding Co", fundingStage: "Seed", fundingDate: new Date(Date.now() - 400 * 24 * 60 * 60 * 1000) },
+    });
+
+    const result = await computeIntentScore(oldFundedCo.id);
+    const signal = result?.signals.find((s) => s.source === "funding");
+
+    // 400 days > FUNDING_DECAY.floorDays (365) → floor multiplier 0.3 flat. round(15 * 0.3) = 5.
+    expect(signal?.points).toBe(5);
+    expect(signal!.points).toBeGreaterThan(0);
+  });
+
+  it("never fabricates a funding signal when fundingStage is not on file", async () => {
+    const noFundingCo = await prisma.company.create({ data: { organizationId, name: "No Funding On File Co" } });
+
+    const result = await computeIntentScore(noFundingCo.id);
+
+    expect(result?.signals.some((s) => s.source === "funding")).toBe(false);
+  });
+
+  it("real job-change signal: a contact with a fresh companyChangedAt gets a real Job change signal", async () => {
+    const newHireCo = await prisma.company.create({ data: { organizationId, name: "New Hire Co" } });
+    await prisma.contact.create({
+      data: { organizationId, companyId: newHireCo.id, firstName: "New", lastName: "Hire", email: `new-hire-${Date.now()}@example.com`, companyChangedAt: new Date() },
+    });
+
+    const result = await computeIntentScore(newHireCo.id);
+    const signal = result?.signals.find((s) => s.source === "jobChange");
+
+    expect(signal).toBeDefined();
+    expect(signal?.points).toBe(12); // JOB_CHANGE_POINTS, full weight — companyChangedAt is today
+  });
+
+  it("never fabricates a job-change signal for a contact who was never reassigned", async () => {
+    const stableCo = await prisma.company.create({ data: { organizationId, name: "Stable Contact Co" } });
+    await prisma.contact.create({
+      data: { organizationId, companyId: stableCo.id, firstName: "Stable", email: `stable-${Date.now()}@example.com` },
+    });
+
+    const result = await computeIntentScore(stableCo.id);
+
+    expect(result?.signals.some((s) => s.source === "jobChange")).toBe(false);
+  });
+
+  it("caps the job-change signal so multiple recent job changes don't dominate the score", async () => {
+    const bulkCo = await prisma.company.create({ data: { organizationId, name: "Bulk Job Change Co" } });
+    for (let i = 0; i < 3; i++) {
+      await prisma.contact.create({
+        data: { organizationId, companyId: bulkCo.id, firstName: `Hire${i}`, email: `bulk-hire-${i}-${Date.now()}@example.com`, companyChangedAt: new Date() },
+      });
+    }
+
+    const result = await computeIntentScore(bulkCo.id);
+    const jobChangeSignals = result?.signals.filter((s) => s.source === "jobChange") ?? [];
+    const total = jobChangeSignals.reduce((sum, s) => sum + s.points, 0);
+
+    expect(jobChangeSignals.length).toBe(2); // JOB_CHANGE_CAP (24) / JOB_CHANGE_POINTS (12) = 2 counted
+    expect(total).toBe(24); // JOB_CHANGE_CAP — never exceeded
+  });
 });

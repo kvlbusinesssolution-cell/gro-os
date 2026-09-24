@@ -68,7 +68,16 @@ export async function prefillCVFromProfileAction(careerProfileId: string): Promi
   const profile = await resolveOwnedProfile(userId, membership.organizationId, careerProfileId);
   if (!profile) return { ok: false, error: "Career profile not found." };
 
-  const content = cvContentSchema.parse({
+  // The profile's raw resume-extracted JSON (resume-extraction.ts) legitimately
+  // allows an entry with a missing institution/cert/project name — but
+  // cvContentSchema requires those same fields non-empty. Rather than
+  // fabricating a placeholder name (never done in this codebase) or letting
+  // an incomplete entry crash the whole prefill, entries missing their one
+  // required identifying field are dropped here before validating.
+  const hasName = (entry: unknown, key: string): boolean =>
+    typeof entry === "object" && entry !== null && typeof (entry as Record<string, unknown>)[key] === "string" && (entry as Record<string, string>)[key].trim().length > 0;
+
+  const parsed = cvContentSchema.safeParse({
     personal: {
       fullName: session.user?.name ?? "",
       headline: profile.currentRole ?? "",
@@ -79,13 +88,14 @@ export async function prefillCVFromProfileAction(careerProfileId: string): Promi
         .map((url) => ({ label: urlHostnameLabel(url), url })),
     },
     experience: [],
-    education: Array.isArray(profile.education) ? profile.education : [],
+    education: Array.isArray(profile.education) ? profile.education.filter((e) => hasName(e, "institution")) : [],
     skills: Array.isArray(profile.skills) ? (profile.skills as unknown[]).filter((s): s is string => typeof s === "string") : [],
-    certifications: Array.isArray(profile.certifications) ? profile.certifications : [],
-    projects: Array.isArray(profile.projects) ? profile.projects : [],
+    certifications: Array.isArray(profile.certifications) ? profile.certifications.filter((c) => hasName(c, "name")) : [],
+    projects: Array.isArray(profile.projects) ? profile.projects.filter((p) => hasName(p, "name")) : [],
   });
+  if (!parsed.success) return { ok: false, error: "Your profile data couldn't be used to prefill a CV — please build one from scratch instead." };
 
-  return { ok: true, content };
+  return { ok: true, content: parsed.data };
 }
 
 export interface CreateCVResult extends ActionResult {

@@ -21,6 +21,8 @@ export const es: Dictionary = {
   "nav.growthEngine": "Motor de Crecimiento",
   "nav.websiteScanner": "Escáner de Sitios Web",
   "nav.outreach": "Alcance",
+  "nav.marketing": "Marketing",
+  "nav.businessGrowth": "Crecimiento empresarial",
   "nav.crm": "CRM",
   "nav.projects": "Proyectos",
   "nav.delivery": "Entrega",

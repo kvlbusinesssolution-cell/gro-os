@@ -92,7 +92,11 @@ const SENT_STATUSES = ["SENT", "DELIVERED", "READ"] as const;
 export async function computeReplyLikelihood(organizationId: string, channel: DraftChannel, asOf: Date = new Date()): Promise<LikelihoodPrediction> {
   const drafts = await prisma.emailDraft.findMany({
     where: { organizationId, channel, status: { in: [...SENT_STATUSES] }, createdAt: { lte: asOf } },
-    select: { id: true, createdAt: true, replies: { select: { id: true }, take: 1 } },
+    // receivedAt filtered to asOf too — a reply that arrives AFTER asOf must
+    // not count as a numerator hit, or a backtest at a past asOf would use
+    // information it couldn't have had yet (look-ahead bias) and report
+    // inflated accuracy.
+    select: { id: true, createdAt: true, replies: { where: { receivedAt: { lte: asOf } }, select: { id: true }, take: 1 } },
   });
   const numerator = drafts.filter((d) => d.replies.length > 0).length;
   return buildLikelihood(`reply on ${channel}`, numerator, drafts.length, drafts.map((d) => d.createdAt));
@@ -106,7 +110,10 @@ export async function computeReplyLikelihood(organizationId: string, channel: Dr
 export async function computeMeetingLikelihood(organizationId: string, channel: DraftChannel, asOf: Date = new Date()): Promise<LikelihoodPrediction> {
   const drafts = await prisma.emailDraft.findMany({
     where: { organizationId, channel, status: { in: [...SENT_STATUSES] }, createdAt: { lte: asOf } },
-    select: { id: true, createdAt: true, outreachMeetings: { select: { id: true }, take: 1 } },
+    // createdAt filtered to asOf too — same look-ahead-bias fix as
+    // computeReplyLikelihood above: a meeting booked AFTER asOf must not
+    // count as a numerator hit for a prediction as-of that earlier date.
+    select: { id: true, createdAt: true, outreachMeetings: { where: { createdAt: { lte: asOf } }, select: { id: true }, take: 1 } },
   });
   const numerator = drafts.filter((d) => d.outreachMeetings.length > 0).length;
   return buildLikelihood(`meeting from ${channel} outreach`, numerator, drafts.length, drafts.map((d) => d.createdAt));
@@ -127,7 +134,10 @@ export async function computeOpportunityLikelihood(organizationId: string, indus
       createdAt: { lte: asOf },
       contacts: { some: { replies: { some: { receivedAt: { lte: asOf } } } } },
     },
-    select: { id: true, createdAt: true, leadOpportunities: { select: { id: true }, take: 1 } },
+    // createdAt filtered to asOf too — same look-ahead-bias fix as the two
+    // functions above: an opportunity generated AFTER asOf must not count
+    // as a numerator hit for a prediction as-of that earlier date.
+    select: { id: true, createdAt: true, leadOpportunities: { where: { createdAt: { lte: asOf } }, select: { id: true }, take: 1 } },
   });
   const numerator = companies.filter((c) => c.leadOpportunities.length > 0).length;
   return buildLikelihood(industry ? `opportunity generation for "${industry}" companies with real reply engagement` : "opportunity generation for companies with real reply engagement", numerator, companies.length, companies.map((c) => c.createdAt));

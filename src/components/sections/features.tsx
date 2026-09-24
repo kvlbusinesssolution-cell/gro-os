@@ -9,6 +9,8 @@ import {
   RefreshCw,
   Bot,
   Workflow as WorkflowIcon,
+  Receipt,
+  MapPinned,
   type LucideIcon,
 } from "lucide-react";
 
@@ -81,6 +83,20 @@ const FEATURES: Feature[] = [
     title: "Workflow Automation Builder",
     description:
       "Compose triggers, conditions, and actions across acquisition and retention in a visual builder, no engineering ticket required.",
+  },
+  {
+    icon: Receipt,
+    accent: "rose",
+    title: "From Lead to Paid Invoice, One System",
+    description:
+      "Proposals, contracts, project delivery, and GST-ready invoicing live in the same platform as your pipeline — revenue reporting traces back to invoices actually paid, not deals that merely closed.",
+  },
+  {
+    icon: MapPinned,
+    accent: "amber",
+    title: "Local Directory & Career Agent, Built In",
+    description:
+      "A JustDial-style public business directory and an AI job-search agent run on the same infrastructure as your growth engine — two more ways this platform earns its keep beyond CRM.",
   },
 ];
 

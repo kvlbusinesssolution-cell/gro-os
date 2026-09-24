@@ -644,6 +644,14 @@ export async function handleGatewayWebhookEvent(provider: PaymentGatewayProvider
       return;
     }
 
+    // Same metadata-first routing, for a real Growth Token top-up purchase
+    // (kind: "growth_token_purchase" — src/lib/billing/token-purchase.ts).
+    if (event.metadata?.kind === "growth_token_purchase") {
+      const { handleGrowthTokenPurchaseWebhookEvent } = await import("./token-purchase");
+      await handleGrowthTokenPurchaseWebhookEvent(provider, event);
+      return;
+    }
+
     switch (event.type) {
       case "checkout.completed":
         await handleCheckoutCompleted(provider, event);

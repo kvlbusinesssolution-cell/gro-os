@@ -7,7 +7,8 @@ import { prisma } from "@/lib/prisma";
 import { generateUniqueOrgSlug } from "@/lib/slug";
 import { logAudit } from "@/lib/audit";
 import { ensurePlansSeeded, getDefaultFreePlan } from "@/lib/billing/plan-catalog";
-import type { Organization } from "@/generated/prisma/client";
+import { grantSignupBonusTokens } from "@/lib/billing/growth-tokens";
+import type { Organization, OrganizationType } from "@/generated/prisma/client";
 import {
   companyProfileSchema,
   businessDetailsSchema,
@@ -75,6 +76,11 @@ export async function createOrContinueOrganization(): Promise<OnboardingActionRe
       name: placeholderName,
       slug,
       referredByPartnerId,
+      // A brand new signup hasn't chosen Business vs Career yet — override
+      // the schema's own `@default(true)` (which exists so pre-existing
+      // rows backfill as already-confirmed) so the wizard's first screen
+      // (StepAccountType) shows before anything else.
+      accountTypeConfirmed: false,
       memberships: {
         create: { userId, role: "OWNER", status: "ACTIVE" },
       },
@@ -92,9 +98,13 @@ export async function createOrContinueOrganization(): Promise<OnboardingActionRe
   await ensurePlansSeeded();
   const freePlan = await getDefaultFreePlan(organization.currency ?? "USD");
   if (freePlan) {
-    await prisma.billingAccount.create({
+    const billingAccount = await prisma.billingAccount.create({
       data: { organizationId: organization.id, currentPlanId: freePlan.id },
     });
+    // Founder promo (2026-09): a real, one-time 300-token welcome gift for
+    // every brand-new signup — never repeated (this whole branch only runs
+    // once, the first time an org is created for this user).
+    await grantSignupBonusTokens(billingAccount.id, organization.id);
   }
 
   await logAudit({
@@ -121,6 +131,45 @@ async function requireOwnedOrganization(orgId: string, userId: string) {
   });
   if (!membership || membership.organization.id !== orgId) return null;
   return membership.organization;
+}
+
+/**
+ * Onboarding's real first screen (StepAccountType) — decides once, up
+ * front, whether this organization gets the full BUSINESS command center or
+ * the job-seeker-only CAREER shell (src/app/dashboard/layout.tsx +
+ * _components/sidebar.tsx branch on Organization.type). CAREER skips the
+ * rest of the business wizard (company profile/business details/services)
+ * entirely — those fields are meaningless for a personal job-seeker
+ * workspace — the caller (OnboardingWizard) redirects straight to
+ * /dashboard/career on a CAREER choice instead of advancing to step 2.
+ */
+export async function chooseAccountType(orgId: string, type: OrganizationType): Promise<OnboardingActionResult> {
+  const session = await auth();
+  if (!session?.user?.id) return { ok: false, error: "You must be signed in." };
+  const userId = session.user.id;
+
+  const organization = await requireOwnedOrganization(orgId, userId);
+  if (!organization) return { ok: false, error: "You do not have access to this organization." };
+
+  // Rename the still-placeholder "X's Organization" name (never a
+  // user-customized one — customizing it only becomes possible on the
+  // business wizard's own Company Profile step, which a CAREER choice
+  // skips entirely) into something that actually reads as a personal
+  // career workspace instead of a business entity.
+  const placeholderMatch = type === "CAREER" ? organization.name.match(/^(.*)'s Organization$/) : null;
+
+  const updated = await prisma.organization.update({
+    where: { id: orgId },
+    data: {
+      type,
+      accountTypeConfirmed: true,
+      ...(placeholderMatch ? { name: `${placeholderMatch[1]}'s Career Workspace` } : {}),
+    },
+  });
+
+  await logAudit({ userId, organizationId: orgId, action: "onboarding.account_type_chosen", metadata: { type } });
+
+  return { ok: true, organization: updated };
 }
 
 export async function updateCompanyProfile(
